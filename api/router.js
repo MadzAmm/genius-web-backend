@@ -208,9 +208,7 @@
 // }
 
 // File: api/router.js
-// VERSI 6: Arsitektur "Jalur Prioritas"
-// (Cascade Koding: Pro -> DeepSeek -> Flash -> Lite)
-// (Cascade Chat:   Flash -> Lite -> Mistral -> Pro)
+// VERSI 7: Menambahkan Rute Debug Khusus untuk Unit Testing
 
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { HfInference } = require('@huggingface/inference');
@@ -249,37 +247,47 @@ export default async function handler(req, res) {
 
     // --- 4. LOGIKA ROUTER INTI ---
     switch (task) {
+      // == RUTE PRODUKSI (DENGAN CASCADE) ==
       case 'chat_general':
       case 'info_portofolio':
         const finalPrompt =
           task === 'info_portofolio'
             ? `KONTEKS: [CV Anda di sini...]. Pertanyaan: ${prompt}`
             : prompt;
-        // Task non-koding menggunakan cascade "Cepat"
         responsePayload = await handleChatCascade(finalPrompt);
         break;
 
       case 'assistent_coding':
-        // Task koding menggunakan cascade "Kualitas"
         responsePayload = await handleCodingCascade(prompt);
         break;
 
+      // ===============================================
+      // == RUTE DEBUG (MEM-BYPASS CASCADE) ==
+      // ===============================================
+      case '_debug_gemini_pro':
+        responsePayload = await callGemini('gemini-2.5-pro', prompt);
+        break;
+      case '_debug_gemini_flash':
+        responsePayload = await callGemini('gemini-2.5-flash', prompt);
+        break;
+      case '_debug_gemini_lite':
+        responsePayload = await callGemini('gemini-2.5-flash-lite', prompt);
+        break;
+      case '_debug_hf_deepseek':
+        const hfPrompt = `<｜begin of sentence｜>User: ${prompt}\n\nAssistant:`;
+        responsePayload = await callHuggingFace(
+          'deepseek-ai/deepseek-coder-6.7b-instruct',
+          hfPrompt
+        );
+        break;
+      case '_debug_hf_mistral':
+        responsePayload = await callHuggingFace(
+          'mistralai/Mistral-7B-Instruct-v0.2',
+          prompt
+        );
+        break;
+
       // ... (placeholder) ...
-      case 'analisis_dokumen':
-        responsePayload = {
-          reply_text: "Task 'analisis_dokumen' belum diimplementasikan.",
-        };
-        break;
-      case 'studio_visual':
-        responsePayload = {
-          reply_text: "Task 'studio_visual' belum diimplementasikan.",
-        };
-        break;
-      case 'analisis_ml':
-        responsePayload = {
-          reply_text: "Task 'analisis_ml' belum diimplementasikan.",
-        };
-        break;
       default:
         res.status(400).json({ error: 'Task tidak dikenal' });
         return;
@@ -289,7 +297,7 @@ export default async function handler(req, res) {
   } catch (error) {
     console.error('Error di Smart Router:', error.message);
     res.status(500).json({
-      error: 'Semua model AI sedang sibuk atau gagal.',
+      error: 'Terjadi kesalahan di server',
       details: error.message,
     });
   }
@@ -301,7 +309,7 @@ export default async function handler(req, res) {
  * Helper generik untuk memanggil model Gemini
  */
 async function callGemini(modelName, prompt) {
-  console.log(`Mencoba ${modelName}...`);
+  console.log(`(Debug) Mencoba ${modelName}...`);
   try {
     const model = genAI.getGenerativeModel({ model: modelName });
     const result = await model.generateContent(prompt);
@@ -309,6 +317,7 @@ async function callGemini(modelName, prompt) {
   } catch (error) {
     const enhancedError = new Error(error.message);
     enhancedError.status = error.status || error.cause?.status || 500;
+    console.error(`(Debug) GAGAL di ${modelName}:`, enhancedError);
     throw enhancedError;
   }
 }
@@ -317,7 +326,7 @@ async function callGemini(modelName, prompt) {
  * Helper untuk memanggil Hugging Face
  */
 async function callHuggingFace(modelName, prompt) {
-  console.log(`Mencoba ${modelName}...`);
+  console.log(`(Debug) Mencoba ${modelName}...`);
   try {
     const result = await hf.textGeneration({
       model: modelName,
@@ -325,6 +334,7 @@ async function callHuggingFace(modelName, prompt) {
     });
     return { reply_text: result.generated_text, source: modelName };
   } catch (error) {
+    console.error(`(Debug) GAGAL di ${modelName}:`, error);
     throw new Error('Hugging Face API gagal');
   }
 }
@@ -333,43 +343,38 @@ async function callHuggingFace(modelName, prompt) {
  * Helper untuk memeriksa error 429 (Rate Limit) atau 503 (Overloaded)
  */
 function isTryAgainError(error) {
-  return error && (error.status === 429 || error.status === 503);
+  const isRetryable = error && (error.status === 429 || error.status === 503);
+  console.log(
+    `(Debug) Mendeteksi error ${error.status}. Apakah bisa dicoba lagi? ${isRetryable}`
+  );
+  return isRetryable;
 }
 
 // --- 6. FUNGSI CASCADE (SKEMA ANDA) ---
+// (Logika ini tetap sama persis seperti Versi 6)
 
 /**
- * CASCADE "CHAT" (Untuk Chat Umum & Info)
- * Prioritas: Kecepatan (RPM Tinggi) & Menyimpan kuota 'Pro'
- * Urutan: Flash (10 RPM) -> Lite (15 RPM) -> HF Mistral -> Pro (2 RPM)
+ * CASCADE "CHAT" (Flash -> Lite -> Mistral -> Pro)
  */
 async function handleChatCascade(prompt) {
-  // === UPAYA 1: Gemini 2.5 Flash (10 RPM) ===
   try {
     return await callGemini('gemini-2.5-flash', prompt);
   } catch (errorFlash) {
-    if (!isTryAgainError(errorFlash)) throw errorFlash; // Error serius
-    console.warn('Gemini 2.5 Flash sibuk (10 RPM). Pindah ke Flash-Lite...');
-
-    // === UPAYA 2: Gemini 2.5 Flash-Lite (15 RPM) ===
+    if (!isTryAgainError(errorFlash)) throw errorFlash;
+    console.warn('Gemini 2.5 Flash sibuk. Pindah ke Flash-Lite...');
     try {
       return await callGemini('gemini-2.5-flash-lite', prompt);
     } catch (errorLite) {
-      if (!isTryAgainError(errorLite)) throw errorLite; // Error serius
+      if (!isTryAgainError(errorLite)) throw errorLite;
       console.warn('Model chat Gemini sibuk. Pindah ke HF (Mistral)...');
-
-      // === UPAYA 3: HF Mistral (Jaring Pengaman Sistem) ===
       try {
         return await callHuggingFace(
           'mistralai/Mistral-7B-Instruct-v0.2',
           prompt
         );
       } catch (errorHF) {
-        if (!isTryAgainError(errorHF)) throw errorHF; // Error serius (HF bisa 503 juga)
+        if (!isTryAgainError(errorHF)) throw errorHF;
         console.warn('HF Mistral sibuk. Pindah ke Pro (Upaya Terakhir)...');
-
-        // === UPAYA 4: Gemini 2.5 Pro (2 RPM - Pilihan Terakhir) ===
-        // Hanya digunakan jika semua model cepat gagal
         return await callGemini('gemini-2.5-pro', prompt);
       }
     }
@@ -377,40 +382,28 @@ async function handleChatCascade(prompt) {
 }
 
 /**
- * CASCADE "KODING" (Untuk Asisten Koding)
- * Prioritas: Kecerdasan (Model Terbaik)
- * Urutan: Pro (2 RPM) -> DeepSeek (HF) -> Flash (10 RPM) -> Lite (15 RPM)
+ * CASCADE "KODING" (Pro -> DeepSeek -> Flash -> Lite)
  */
 async function handleCodingCascade(prompt) {
   const hfPrompt = `<｜begin of sentence｜>User: ${prompt}\n\nAssistant:`;
-
-  // === UPAYA 1: Gemini 2.5 Pro (2 RPM) ===
   try {
     return await callGemini('gemini-2.5-pro', prompt);
   } catch (errorPro) {
-    if (!isTryAgainError(errorPro)) throw errorPro; // Error serius
-    console.warn('Gemini 2.5 Pro sibuk (2 RPM). Pindah ke DeepSeek (HF)...');
-
-    // === UPAYA 2: HF DeepSeek (Spesialis Koding) ===
+    if (!isTryAgainError(errorPro)) throw errorPro;
+    console.warn('Gemini 2.5 Pro sibuk. Pindah ke DeepSeek (HF)...');
     try {
       return await callHuggingFace(
         'deepseek-ai/deepseek-coder-6.7b-instruct',
         hfPrompt
       );
     } catch (errorHF) {
-      if (!isTryAgainError(errorHF)) throw errorHF; // HF juga bisa sibuk (503)
+      if (!isTryAgainError(errorHF)) throw errorHF;
       console.warn('DeepSeek sibuk. Pindah ke Gemini 2.5 Flash...');
-
-      // === UPAYA 3: Gemini 2.5 Flash (10 RPM) ===
       try {
         return await callGemini('gemini-2.5-flash', prompt);
       } catch (errorFlash) {
         if (!isTryAgainError(errorFlash)) throw errorFlash;
-        console.warn(
-          'Gemini 2.5 Flash sibuk (10 RPM). Pindah ke Flash-Lite...'
-        );
-
-        // === UPAYA 4: Gemini 2.5 Flash-Lite (15 RPM - Jaring Pengaman Terakhir) ===
+        console.warn('Gemini 2.5 Flash sibuk. Pindah ke Flash-Lite...');
         return await callGemini('gemini-2.5-flash-lite', prompt);
       }
     }
