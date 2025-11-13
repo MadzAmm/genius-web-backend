@@ -1,5 +1,6 @@
 // File: api/router.js
-// VERSI FINAL: Menerapkan logika Cascade Penuh (Pro -> Flash -> Lite -> HF)
+// VERSI FINAL: Strategi "Kolam Gemini" (Cascade Cerdas & Cepat)
+// (Berdasarkan data rate limit yang Anda temukan)
 
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { HfInference } = require('@huggingface/inference');
@@ -12,10 +13,10 @@ const hf = new HfInference(process.env.HF_API_KEY);
 
 // --- 2. KONFIGURASI CORS ---
 // Mengizinkan frontend Anda di GitHub Pages untuk memanggil backend ini.
-const GITHUB_PAGES_DOMAIN = 'https://MadzAmm.github.io';
+const GITHUB_PAGES_DOMAIN = 'https://MadzAmm.github.io'; // Sesuai nama Anda
 const corsHandler = cors({ origin: GITHUB_PAGES_DOMAIN });
 
-// Helper untuk menjalankan middleware CORS di Vercel
+// Helper untuk middleware CORS di Vercel
 const runMiddleware = (req, res, fn) => {
   return new Promise((resolve, reject) => {
     fn(req, res, (result) => {
@@ -27,41 +28,35 @@ const runMiddleware = (req, res, fn) => {
 
 // --- 3. "SMART ROUTER" UTAMA (VERCEL SERVERLESS FUNCTION) ---
 export default async function handler(req, res) {
-  // 1. Terapkan CORS Handler di setiap permintaan
+  // Terapkan CORS Handler
   await runMiddleware(req, res, corsHandler);
 
-  // 2. Keamanan: Hanya izinkan metode POST
+  // Keamanan
   if (req.method !== 'POST') {
     res.status(405).send({ error: 'Method Not Allowed' });
     return;
   }
 
-  // 3. Blok Try...Catch Utama untuk menangani error
+  // Blok Try...Catch Utama
   try {
     const { task, prompt } = req.body;
     let responsePayload;
 
-    // --- 4. LOGIKA ROUTER INTI ---
+    // --- 4. LOGIKA ROUTER INTI (Cerdas & Cepat) ---
     switch (task) {
       case 'chat_general':
-        responsePayload = await handleChatGeneral(prompt);
-        break;
-      case 'assistent_coding':
-        responsePayload = await handleCodingAssistant(prompt);
-        break;
       case 'info_portofolio':
-        const portfolioPrompt = `
-          KONTEKS TENTANG SAYA:
-          [Tulis CV Anda di sini: Nama saya... Lulusan Aqidah & Filsafat Islam... 
-          Tertarik pada web dev (React, Framer Motion) dan data analysis (Python, scikit-learn)...]
+        // Task non-koding menggunakan cascade "Cepat"
+        const finalPrompt =
+          task === 'info_portofolio'
+            ? `KONTEKS: [CV Anda di sini...]. Pertanyaan: ${prompt}`
+            : prompt;
+        responsePayload = await handleFastCascade(finalPrompt);
+        break;
 
-          Pertanyaan Pengguna: ${prompt}
-        `;
-        // Kita gunakan model 30 RPM untuk info portofolio agar cepat
-        responsePayload = await callGemini(
-          'gemini-2.0-flash-lite',
-          portfolioPrompt
-        );
+      case 'assistent_coding':
+        // Task koding menggunakan cascade "Cerdas"
+        responsePayload = await handleSmartCascade(prompt);
         break;
 
       // --- Placeholder untuk task masa depan ---
@@ -90,7 +85,7 @@ export default async function handler(req, res) {
   } catch (error) {
     console.error('Error di Smart Router:', error.message);
     res.status(500).json({
-      error: 'Terjadi kesalahan di server',
+      error: 'Semua model AI sedang sibuk atau gagal.',
       details: error.message,
     });
   }
@@ -100,18 +95,15 @@ export default async function handler(req, res) {
 
 /**
  * Helper generik untuk memanggil model Gemini
- * Ini dirancang untuk "melemparkan" (throw) error agar bisa ditangkap oleh cascade.
  */
 async function callGemini(modelName, prompt) {
+  console.log(`Mencoba ${modelName}...`);
   try {
     const model = genAI.getGenerativeModel({ model: modelName });
     const result = await model.generateContent(prompt);
-    const response = await result.response;
-    // Menambahkan 'source' agar kita tahu model mana yang merespons
-    return { reply_text: response.text(), source: modelName };
+    return { reply_text: result.response.text(), source: modelName };
   } catch (error) {
-    console.error(`Error saat memanggil ${modelName}:`, error.message);
-    // Tambahkan 'status' ke error agar kita bisa mendeteksi Rate Limit (429)
+    // Tambahkan status ke error agar kita bisa mendeteksinya
     const enhancedError = new Error(error.message);
     enhancedError.status = error.status || 500;
     throw enhancedError;
@@ -119,97 +111,97 @@ async function callGemini(modelName, prompt) {
 }
 
 /**
- * Helper untuk memanggil Hugging Face (DeepSeek)
+ * Helper untuk memanggil Hugging Face
  */
-async function callHuggingFace(prompt) {
+async function callHuggingFace(modelName, prompt) {
+  console.log(`Mencoba ${modelName}...`);
   try {
-    const model = 'deepseek-ai/deepseek-coder-6.7b-instruct';
     const result = await hf.textGeneration({
-      model: model,
-      inputs: `<｜begin of sentence｜>User: ${prompt}\n\nAssistant:`,
-      parameters: { max_new_tokens: 1024 }, // Ditambah tokennya
+      model: modelName,
+      inputs: prompt,
     });
-    return { reply_text: result.generated_text, source: model };
+    return { reply_text: result.generated_text, source: modelName };
   } catch (error) {
-    console.error('Error saat memanggil Hugging Face:', error.message);
-    throw new Error('Gagal menghubungi Hugging Face API');
+    throw new Error('Hugging Face API gagal');
   }
 }
 
 /**
- * Helper untuk memeriksa apakah ini error "Rate Limit"
- * (Error Google biasanya memiliki status 429)
+ * Helper untuk memeriksa apakah ini error "Rate Limit" (429)
  */
 function isRateLimitError(error) {
   return error && error.status === 429;
 }
 
-// --- 6. FUNGSI TASK SPESIFIK (SKEMA ANDA) ---
+// --- 6. FUNGSI CASCADE (SKEMA ANDA) ---
 
 /**
- * Task 1: Obrolan Umum
- * Menggunakan model RPM tertinggi untuk obrolan.
- * Model: gemini-2.0-flash-lite (30 RPM - dari screenshot Anda!)
+ * CASCADE "CEPAT" (Untuk Chat Umum & Info)
+ * Prioritas: Kecepatan (RPM Tinggi)
+ * Urutan: 30 RPM -> 15 RPM -> HF Mistral
  */
-async function handleChatGeneral(prompt) {
-  // Langsung panggil model 30 RPM. Cepat dan efisien.
-  return await callGemini('gemini-2.0-flash-lite', prompt);
+async function handleFastCascade(prompt) {
+  // === UPAYA 1: Gemini 2.0 Flash-Lite (30 RPM) ===
+  try {
+    return await callGemini('gemini-2.0-flash-lite', prompt);
+  } catch (errorLite2) {
+    if (!isRateLimitError(errorLite2)) throw errorLite2; // Error serius
+    console.warn(
+      'Gemini 2.0 Flash-Lite sibuk (30 RPM). Pindah ke 2.5 Flash-Lite...'
+    );
+
+    // === UPAYA 2: Gemini 2.5 Flash-Lite (15 RPM) ===
+    try {
+      return await callGemini('gemini-2.5-flash-lite', prompt);
+    } catch (errorLite25) {
+      if (!isRateLimitError(errorLite25)) throw errorLite25; // Error serius
+      console.warn('Semua model chat Gemini sibuk. Pindah ke HF (Mistral)...');
+
+      // === UPAYA 3: HF Mistral (Jaring Pengaman) ===
+      return await callHuggingFace(
+        'mistralai/Mistral-7B-Instruct-v0.2',
+        prompt
+      );
+    }
+  }
 }
 
 /**
- * Task 2: Asisten Koding (LOGIKA CASCADE ANDA)
- * (Pro -> Flash -> Lite -> HF)
+ * CASCADE "CERDAS" (Untuk Asisten Koding)
+ * Prioritas: Kecerdasan (Model Terbaik)
+ * Urutan: 2 RPM -> 10 RPM -> 15 RPM -> HF DeepSeek
  */
-async function handleCodingAssistant(prompt) {
+async function handleSmartCascade(prompt) {
+  const hfPrompt = `<｜begin of sentence｜>User: ${prompt}\n\nAssistant:`;
+
   // === UPAYA 1: Gemini 2.5 Pro (2 RPM) ===
   try {
-    console.log('Mencoba Gemini 2.5 Pro (2 RPM)...');
     return await callGemini('gemini-2.5-pro', prompt);
   } catch (errorPro) {
-    if (!isRateLimitError(errorPro)) {
-      console.error('Error non-rate-limit di Pro:', errorPro.message);
-      throw errorPro; // Gagal karena alasan lain (misal API key salah)
-    }
-
-    // Ini *adalah* error rate limit (429). Lanjut ke upaya 2.
-    console.warn('Gemini 2.5 Pro sibuk (2 RPM). Pindah ke Flash...');
+    if (!isRateLimitError(errorPro)) throw errorPro; // Error serius
+    console.warn('Gemini 2.5 Pro sibuk (2 RPM). Pindah ke 2.5 Flash...');
 
     // === UPAYA 2: Gemini 2.5 Flash (10 RPM) ===
     try {
       return await callGemini('gemini-2.5-flash', prompt);
     } catch (errorFlash) {
-      if (!isRateLimitError(errorFlash)) {
-        console.error('Error non-rate-limit di Flash:', errorFlash.message);
-        throw errorFlash;
-      }
-
-      // Ini *juga* error rate limit. Lanjut ke upaya 3.
-      console.warn('Gemini 2.5 Flash sibuk (10 RPM). Pindah ke Flash-Lite...');
+      if (!isRateLimitError(errorFlash)) throw errorFlash;
+      console.warn(
+        'Gemini 2.5 Flash sibuk (10 RPM). Pindah ke 2.5 Flash-Lite...'
+      );
 
       // === UPAYA 3: Gemini 2.5 Flash-Lite (15 RPM) ===
       try {
         return await callGemini('gemini-2.5-flash-lite', prompt);
       } catch (errorFlashLite) {
-        if (!isRateLimitError(errorFlashLite)) {
-          console.error(
-            'Error non-rate-limit di Flash-Lite:',
-            errorFlashLite.message
-          );
-          throw errorFlashLite;
-        }
+        if (!isRateLimitError(errorFlashLite)) throw errorFlashLite;
+        console.warn('Semua model Gemini sibuk. Pindah ke HF (DeepSeek)...');
 
-        // Semua model Gemini sibuk. Lanjut ke upaya 4.
-        console.warn('Semua model Gemini sibuk. Pindah ke Hugging Face...');
-
-        // === UPAYA 4: Fallback ke Hugging Face ===
-        try {
-          return await callHuggingFace(prompt);
-        } catch (errorHF) {
-          console.error('Hugging Face juga gagal:', errorHF.message);
-          throw new Error(
-            'Semua model AI sedang sibuk. Silakan coba lagi nanti.'
-          );
-        }
+        // === UPAYA 4: HF DeepSeek (Jaring Pengaman Koding) ===
+        return await callHuggingFace(
+          'deepseek-ai/deepseek-coder-6.7b-instruct',
+          hfPrompt
+        );
       }
     }
   }
