@@ -1,3 +1,4 @@
+
 // const { GoogleGenerativeAI } = require('@google/generative-ai');
 // const Groq = require('groq-sdk');
 // const cors = require('cors');
@@ -208,6 +209,7 @@
 //   }
 // }
 
+
 // File: api/router.js
 // VERSI 16 (FINAL): Memperbaiki 2 Bug Kritis
 // 1. Perbaikan bug 'cite_start' (dengan mengganti file penuh).
@@ -222,7 +224,7 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 // --- 2. KONFIGURASI CORS ---
-const GITHUB_PAGES_DOMAIN = 'https://MadzAmm.github.io';
+const GITHUB_PAGES_DOMAIN = 'https://MadzAmm.github.io'; 
 const corsHandler = cors({ origin: GITHUB_PAGES_DOMAIN });
 
 // Helper untuk middleware CORS
@@ -252,10 +254,9 @@ export default async function handler(req, res) {
     switch (task) {
       case 'chat_general':
       case 'info_portofolio':
-        const finalPrompt =
-          task === 'info_portofolio'
-            ? `KONTEKS: [CV Anda di sini...]. Pertanyaan: ${prompt}`
-            : prompt;
+        const finalPrompt = (task === 'info_portofolio')
+          ? `KONTEKS: [CV Anda di sini...]. Pertanyaan: ${prompt}`
+          : prompt;
         responsePayload = await handleChatCascade(finalPrompt);
         break;
 
@@ -268,13 +269,14 @@ export default async function handler(req, res) {
         res.status(400).json({ error: 'Task tidak dikenal' });
         return;
     }
-
+    
     res.status(200).json(responsePayload);
+
   } catch (error) {
     console.error('Error di Smart Router:', error.message);
-    res.status(500).json({
-      error: 'Semua model AI sedang sibuk atau gagal.',
-      details: error.message,
+    res.status(500).json({ 
+      error: 'Semua model AI sedang sibuk atau gagal.', 
+      details: error.message 
     });
   }
 }
@@ -305,14 +307,13 @@ async function callGroq(modelName, systemPrompt, userPrompt) {
   console.log(`(Cascade) Mencoba Groq: ${modelName}...`);
   try {
     const chatCompletion = await groq.chat.completions.create({
-      messages: [
+      messages: [ 
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
       ],
-      model: modelName,
+      model: modelName, 
     });
-    const reply =
-      chatCompletion.choices[0]?.message?.content || 'Maaf, terjadi kesalahan.';
+    const reply = chatCompletion.choices[0]?.message?.content || 'Maaf, terjadi kesalahan.'; 
     return { reply_text: reply, source: modelName };
   } catch (error) {
     console.error(`(Cascade) GAGAL di ${modelName}:`, error);
@@ -327,11 +328,10 @@ async function callGroq(modelName, systemPrompt, userPrompt) {
  */
 function isTryAgainError(error) {
   const isRetryable = error && (error.status === 429 || error.status === 503);
-  console.log(
-    `(Cascade) Mendeteksi error ${error.status}. Bisa dicoba lagi? ${isRetryable}`
-  );
+  console.log(`(Cascade) Mendeteksi error ${error.status}. Bisa dicoba lagi? ${isRetryable}`);
   return isRetryable;
 }
+
 
 // --- 6. FUNGSI CASCADE (SKEMA ANDA) ---
 
@@ -340,30 +340,29 @@ function isTryAgainError(error) {
  * Urutan: Pro -> Flash -> Groq Compound -> Groq GPT-OSS
  */
 async function handleChatCascade(prompt) {
-  const systemPrompt = 'You are a helpful assistant.';
+  const systemPrompt = "You are a helpful assistant.";
 
   // === UPAYA 1: Gemini 2.5 Pro (2 RPM) ===
   try {
-    return await callGemini('gemini-2.5-pro', prompt);
-  } catch (errorPro) {
-    if (!isTryAgainError(errorPro)) throw errorPro; // Gagal karena API Key salah, dll.
-    console.warn('Gemini Pro sibuk. Pindah ke Gemini Flash...');
+    return await callGemini('gemini-2.5-flash', prompt);
+    } catch (errorFlash) {
+      if (!isTryAgainError(errorFlash)) throw errorFlash;
+      console.warn("Gemini Flash sibuk. Pindah ke Qwen...");
 
     // === UPAYA 2: Gemini 2.5 Flash (10 RPM) ===
     try {
-      return await callGemini('gemini-2.5-flash', prompt);
-    } catch (errorFlash) {
-      if (!isTryAgainError(errorFlash)) throw errorFlash;
-      console.warn('Gemini Flash sibuk. Pindah ke Groq Compound...');
+      return await callGroq('qwen/qwen3-32b', systemPrompt, prompt);
+    } catch (errorQwen) {
+      if (!isTryAgainError(errorQwen)) throw errorQwen;
+      console.warn("Groq Qwen sibuk. Pindah ke Compound...");
+      
 
       // === UPAYA 3: Groq Compound (200 RPM) ===
       try {
         return await callGroq('groq/compound', systemPrompt, prompt);
       } catch (errorCompound) {
         // PERBAIKAN BUG: JANGAN 'throw' di sini. Peringatkan & Lanjutkan.
-        console.warn(
-          'Groq Compound gagal atau sibuk. Pindah ke Groq GPT-OSS...'
-        );
+        console.warn("Groq Compound gagal atau sibuk. Pindah ke Groq GPT-OSS...");
         // Lanjut ke Upaya 4...
 
         // === UPAYA 4: Groq GPT-OSS 20B (1000 RPM - Jaring Pengaman Terakhir) ===
@@ -378,21 +377,27 @@ async function handleChatCascade(prompt) {
  * Urutan: Groq GPT-OSS -> Groq Qwen -> Groq Compound
  */
 async function handleCodingCascade(prompt) {
-  const systemPrompt = 'You are an expert coding assistant.';
+  const systemPrompt = "You are an expert coding assistant.";
 
   // === UPAYA 1: Groq GPT-OSS 20B (1000 RPM) ===
   try {
+    return await callGemini('gemini-2.5-pro', prompt);
+  } catch (errorPro) {
+    if (!isTryAgainError(errorPro)) throw errorPro; // Gagal karena API Key salah, dll.
+    console.warn("Gemini Pro sibuk. Pindah ke Groq GPT-OSS...");
+    
+    try{
     return await callGroq('openai/gpt-oss-20b', systemPrompt, prompt);
   } catch (errorOSS) {
     if (!isTryAgainError(errorOSS)) throw errorOSS; // Gagal karena API Key, dll.
-    console.warn('Groq GPT-OSS sibuk. Pindah ke Qwen...');
+    console.warn("Groq GPT-OSS sibuk. Pindah ke Qwen...");
 
     // === UPAYA 2: Groq Qwen3-32B (1000 RPM) ===
     try {
       return await callGroq('qwen/qwen3-32b', systemPrompt, prompt);
     } catch (errorQwen) {
       if (!isTryAgainError(errorQwen)) throw errorQwen;
-      console.warn('Groq Qwen sibuk. Pindah ke Compound...');
+      console.warn("Groq Qwen sibuk. Pindah ke Compound...");
 
       // === UPAYA 3: Groq Compound (200 RPM - Jaring Pengaman Terakhir) ===
       return await callGroq('groq/compound', systemPrompt, prompt);
