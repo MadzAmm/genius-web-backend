@@ -208,24 +208,25 @@
 // }
 
 // File: api/router.js
-// VERSI 9: Memperbaiki 3 Bug Kritis
-// 1. Memperbaiki logika cascade 'catch' agar tidak 'throw'
-// 2. Mengganti CodeLlama -> StarCoder (model koding HF yang berfungsi)
-// 3. Memperbaiki callHuggingFace agar benar-benar menggunakan task 'conversational'
+// VERSI 13 (FINAL): Sesuai Dokumen Groq
+// - Menggunakan nama model Groq yang benar (llama-3.3-70b-versatile & llama-3.1-8b-instant)
+//   berdasarkan file models.txt & feature-text-chat.txt
 
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const { HfInference } = require('@huggingface/inference');
+const Groq = require('groq-sdk');
 const cors = require('cors');
 
 // --- 1. INISIALISASI KLIEN ---
+// Kunci API ini akan dibaca dari Vercel Environment Variables
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const hf = new HfInference(process.env.HF_API_KEY);
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 // --- 2. KONFIGURASI CORS ---
+// Mengizinkan frontend Anda di GitHub Pages untuk memanggil backend ini.
 const GITHUB_PAGES_DOMAIN = 'https://MadzAmm.github.io';
 const corsHandler = cors({ origin: GITHUB_PAGES_DOMAIN });
 
-// Helper untuk middleware CORS
+// Helper untuk middleware CORS di Vercel
 const runMiddleware = (req, res, fn) => {
   return new Promise((resolve, reject) => {
     fn(req, res, (result) => {
@@ -250,7 +251,6 @@ export default async function handler(req, res) {
 
     // --- 4. LOGIKA ROUTER INTI ---
     switch (task) {
-      // == RUTE PRODUKSI (DENGAN CASCADE) ==
       case 'chat_general':
       case 'info_portofolio':
         const finalPrompt =
@@ -264,35 +264,7 @@ export default async function handler(req, res) {
         responsePayload = await handleCodingCascade(prompt);
         break;
 
-      // ===============================================
-      // == RUTE DEBUG (MEM-BYPASS CASCADE) ==
-      // ===============================================
-      case '_debug_gemini_pro':
-        responsePayload = await callGemini('gemini-2.5-pro', prompt);
-        break;
-      case '_debug_gemini_flash':
-        responsePayload = await callGemini('gemini-2.5-flash', prompt);
-        break;
-      case '_debug_gemini_lite':
-        responsePayload = await callGemini('gemini-2.5-flash-lite', prompt);
-        break;
-
-      // -- Model HF yang Diperbarui --
-      case '_debug_hf_starcoder': // <-- Mengganti CodeLlama
-        responsePayload = await callHuggingFace(
-          'bigcode/starcoder2-3b',
-          prompt,
-          'text-generation' // Menggunakan task 'text-generation'
-        );
-        break;
-      case '_debug_hf_zephyr': // <-- Memperbaiki Mistral
-        responsePayload = await callHuggingFace(
-          'HuggingFaceH4/zephyr-7b-beta',
-          prompt,
-          'conversational' // <-- MEMPERBAIKI TASK
-        );
-        break;
-
+      // ... (Placeholder untuk task lain) ...
       default:
         res.status(400).json({ error: 'Task tidak dikenal' });
         return;
@@ -302,7 +274,7 @@ export default async function handler(req, res) {
   } catch (error) {
     console.error('Error di Smart Router:', error.message);
     res.status(500).json({
-      error: 'Terjadi kesalahan di server',
+      error: 'Semua model AI sedang sibuk atau gagal.',
       details: error.message,
     });
   }
@@ -327,54 +299,43 @@ async function callGemini(modelName, prompt) {
   }
 }
 
-// ====================================================================
-// PERBAIKAN BUG #3: Fungsi HF sekarang benar-benar menangani 'conversational'
-// ====================================================================
 /**
- * Helper untuk memanggil Hugging Face (DIPERBARUI)
+ * Helper generik untuk memanggil API Groq
  */
-async function callHuggingFace(
-  modelName,
-  prompt,
-  taskType = 'text-generation'
-) {
-  console.log(`(Debug) Mencoba ${modelName} dengan task ${taskType}...`);
+async function callGroq(modelName, systemPrompt, userPrompt) {
+  console.log(`(Debug) Mencoba Groq Model: ${modelName}...`);
   try {
-    let result;
-    if (taskType === 'conversational') {
-      // INI ADALAH KODE BARU UNTUK MENANGANI ZEPHYR
-      result = await hf.conversational({
-        model: modelName,
-        inputs: { text: prompt },
-      });
-      // 'conversational' mengembalikan 'generated_text' (jika ada) atau 'assistant'
-      return {
-        reply_text: result.generated_text || result.assistant,
-        source: modelName,
-      };
-    } else {
-      // Default ke textGeneration (untuk StarCoder)
-      result = await hf.textGeneration({
-        model: modelName,
-        inputs: prompt,
-      });
-      return { reply_text: result.generated_text, source: modelName };
-    }
+    const chatCompletion = await groq.chat.completions.create({
+      messages: [
+        {
+          role: 'system',
+          content: systemPrompt,
+        },
+        {
+          role: 'user',
+          content: userPrompt,
+        },
+      ],
+      model: modelName,
+    });
+
+    const reply =
+      chatCompletion.choices[0]?.message?.content || 'Maaf, terjadi kesalahan.';
+    return { reply_text: reply, source: modelName };
   } catch (error) {
     console.error(`(Debug) GAGAL di ${modelName}:`, error);
-    const enhancedError = new Error('Hugging Face API gagal: ' + error.message);
-    enhancedError.status = error.status || 503; // Asumsikan HF gagal karena 'sibuk' (503)
+    const enhancedError = new Error(error.message);
+    enhancedError.status = error.status || 500;
     throw enhancedError;
   }
 }
 
-// ====================================================================
-// PERBAIKAN BUG #1: 'isTryAgainError' sekarang mengenali 503
-// ====================================================================
 /**
  * Helper untuk memeriksa error 429 (Rate Limit) atau 503 (Overloaded)
  */
 function isTryAgainError(error) {
+  // 429 adalah "Too Many Requests" resmi [cite: 389]
+  // 503 adalah error "Overloaded" yang kita lihat dari Gemini
   const isRetryable = error && (error.status === 429 || error.status === 503);
   console.log(
     `(Debug) Mendeteksi error ${error.status}. Apakah bisa dicoba lagi? ${isRetryable}`
@@ -382,36 +343,32 @@ function isTryAgainError(error) {
   return isRetryable;
 }
 
-// --- 6. FUNGSI CASCADE (DENGAN SEMUA PERBAIKAN) ---
+// --- 6. FUNGSI CASCADE (SKEMA ANDA - VERSI DOKUMEN BENAR) ---
 
 /**
- * CASCADE "CHAT" (Flash -> Lite -> HF Zephyr -> Pro)
+ * CASCADE "CHAT" (Flash -> Lite -> Groq Instant -> Pro)
  */
 async function handleChatCascade(prompt) {
   try {
-    return await callGemini('gemini-2.5-flash'); // <-- Sukses (dari tes Anda)
+    return await callGemini('gemini-2.5-flash');
   } catch (errorFlash) {
     if (!isTryAgainError(errorFlash)) throw errorFlash;
     console.warn('Gemini 2.5 Flash sibuk. Pindah ke Flash-Lite...');
     try {
-      return await callGemini('gemini-2.5-flash-lite'); // <-- Sukses (dari tes Anda)
+      return await callGemini('gemini-2.5-flash-lite');
     } catch (errorLite) {
       if (!isTryAgainError(errorLite)) throw errorLite;
-      console.warn('Model chat Gemini sibuk. Pindah ke HF (Zephyr)...');
+      console.warn('Model chat Gemini sibuk. Pindah ke Groq (Instant)...');
       try {
-        // PERBAIKAN: Memanggil Zephyr dengan task 'conversational'
-        return await callHuggingFace(
-          'HuggingFaceH4/zephyr-7b-beta',
-          prompt,
-          'conversational'
+        // Menggunakan model 'instant' dari models.txt [cite: 649]
+        return await callGroq(
+          'llama-3.1-8b-instant',
+          'You are a helpful assistant.',
+          prompt
         );
-      } catch (errorHF) {
-        // ====================================================================
-        // PERBAIKAN BUG #2: Jangan 'throw' error HF, LANJUTKAN ke Pro
-        // ====================================================================
-        if (!isTryAgainError(errorHF)) throw errorHF; // Gagal karena alasan lain (misal API Key)
-        console.warn('HF Zephyr sibuk. Pindah ke Pro (Upaya Terakhir)...');
-        // Lanjutkan ke Upaya 4
+      } catch (errorGroq) {
+        if (!isTryAgainError(errorGroq)) throw errorGroq;
+        console.warn('Groq Instant sibuk. Pindah ke Pro (Upaya Terakhir)...');
         return await callGemini('gemini-2.5-pro');
       }
     }
@@ -419,40 +376,34 @@ async function handleChatCascade(prompt) {
 }
 
 /**
- * CASCADE "KODING" (Pro -> HF StarCoder -> Flash -> Lite)
+ * CASCADE "KODING" (Pro -> Groq Versatile -> Flash -> Lite)
  */
 async function handleCodingCascade(prompt) {
-  const hfPrompt = `<｜begin of sentence｜>User: ${prompt}\n\nAssistant:`;
-
   try {
-    return await callGemini('gemini-2.5-pro'); // <-- Gagal (503) - diharapkan
+    return await callGemini('gemini-2.5-pro');
   } catch (errorPro) {
     if (!isTryAgainError(errorPro)) throw errorPro;
-    console.warn('Gemini 2.5 Pro sibuk. Pindah ke StarCoder (HF)...');
+    console.warn('Gemini 2.5 Pro sibuk. Pindah ke Groq (Versatile)...');
 
-    // ====================================================================
-    // PERBAIKAN BUG #2: Jangan 'throw' error HF, LANJUTKAN ke Flash
-    // PERBAIKAN MODEL: Mengganti CodeLlama -> StarCoder
-    // ====================================================================
     try {
-      return await callHuggingFace(
-        'bigcode/starcoder2-3b', // <-- Model pengganti DeepSeek/CodeLlama
-        prompt, // StarCoder tidak perlu format prompt khusus
-        'text-generation'
+      // Menggunakan model 'versatile' dari models.txt [cite: 655]
+      return await callGroq(
+        'llama-3.3-70b-versatile',
+        'You are an expert coding assistant.',
+        prompt
       );
-    } catch (errorHF) {
-      // JANGAN THROW ERROR. Peringatkan & Lanjutkan ke jaring pengaman Gemini.
+    } catch (errorGroq) {
       console.warn(
-        'HF StarCoder gagal atau sibuk. Pindah ke Gemini 2.5 Flash...'
+        'Groq Versatile gagal atau sibuk. Pindah ke Gemini 2.5 Flash...'
       );
 
       // Lanjut ke Upaya 3
       try {
-        return await callGemini('gemini-2.5-flash'); // <-- Sukses (dari tes Anda)
+        return await callGemini('gemini-2.5-flash');
       } catch (errorFlash) {
         if (!isTryAgainError(errorFlash)) throw errorFlash;
         console.warn('Gemini 2.5 Flash sibuk. Pindah ke Flash-Lite...');
-        return await callGemini('gemini-2.5-flash-lite'); // <-- Sukses (dari tes Anda)
+        return await callGemini('gemini-2.5-flash-lite');
       }
     }
   }
