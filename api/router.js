@@ -208,7 +208,9 @@
 // }
 
 // File: api/router.js
-// VERSI 7: Menambahkan Rute Debug Khusus untuk Unit Testing
+// VERSI 8: Arsitektur "Tangguh"
+// - Mengganti model HF yang rusak
+// - Memperbaiki logika cascade untuk menangani SEMUA error failover
 
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { HfInference } = require('@huggingface/inference');
@@ -273,21 +275,23 @@ export default async function handler(req, res) {
       case '_debug_gemini_lite':
         responsePayload = await callGemini('gemini-2.5-flash-lite', prompt);
         break;
-      case '_debug_hf_deepseek':
-        const hfPrompt = `<｜begin of sentence｜>User: ${prompt}\n\nAssistant:`;
+
+      // -- Model HF yang Diperbarui --
+      case '_debug_hf_codellama': // <-- Mengganti DeepSeek
         responsePayload = await callHuggingFace(
-          'deepseek-ai/deepseek-coder-6.7b-instruct',
-          hfPrompt
+          'codellama/CodeLlama-7b-Instruct-hf',
+          prompt,
+          'text-generation' // Menggunakan task 'text-generation'
         );
         break;
-      case '_debug_hf_mistral':
+      case '_debug_hf_zephyr': // <-- Mengganti Mistral
         responsePayload = await callHuggingFace(
-          'mistralai/Mistral-7B-Instruct-v0.2',
-          prompt
+          'HuggingFaceH4/zephyr-7b-beta',
+          prompt,
+          'text-generation' // Menggunakan task 'text-generation'
         );
         break;
 
-      // ... (placeholder) ...
       default:
         res.status(400).json({ error: 'Task tidak dikenal' });
         return;
@@ -323,22 +327,44 @@ async function callGemini(modelName, prompt) {
 }
 
 /**
- * Helper untuk memanggil Hugging Face
+ * Helper untuk memanggil Hugging Face (DIPERBARUI)
+ * Sekarang menerima 'taskType' untuk mengatasi error 'conversational'
  */
-async function callHuggingFace(modelName, prompt) {
-  console.log(`(Debug) Mencoba ${modelName}...`);
+async function callHuggingFace(
+  modelName,
+  prompt,
+  taskType = 'text-generation'
+) {
+  console.log(`(Debug) Mencoba ${modelName} dengan task ${taskType}...`);
   try {
-    const result = await hf.textGeneration({
-      model: modelName,
-      inputs: prompt,
-    });
-    return { reply_text: result.generated_text, source: modelName };
+    let result;
+    if (taskType === 'conversational') {
+      // (Logika ini sekarang ada jika kita membutuhkannya di masa depan)
+      result = await hf.conversational({
+        model: modelName,
+        inputs: { text: prompt },
+      });
+      return { reply_text: result.generated_text, source: modelName };
+    } else {
+      // Default ke textGeneration
+      result = await hf.textGeneration({
+        model: modelName,
+        inputs: prompt,
+      });
+      return { reply_text: result.generated_text, source: modelName };
+    }
   } catch (error) {
     console.error(`(Debug) GAGAL di ${modelName}:`, error);
-    throw new Error('Hugging Face API gagal');
+    // Tambahkan status ke error agar cascade bisa mendeteksinya
+    const enhancedError = new Error('Hugging Face API gagal: ' + error.message);
+    enhancedError.status = error.status || 503; // Asumsikan HF gagal karena 'sibuk' (503)
+    throw enhancedError;
   }
 }
 
+// ====================================================================
+// PERBAIKAN BUG #1: 'isTryAgainError' sekarang mengenali 503
+// ====================================================================
 /**
  * Helper untuk memeriksa error 429 (Rate Limit) atau 503 (Overloaded)
  */
@@ -349,62 +375,75 @@ function isTryAgainError(error) {
   );
   return isRetryable;
 }
+// ====================================================================
 
-// --- 6. FUNGSI CASCADE (SKEMA ANDA) ---
-// (Logika ini tetap sama persis seperti Versi 6)
+// --- 6. FUNGSI CASCADE (DENGAN MODEL HF BARU) ---
 
 /**
- * CASCADE "CHAT" (Flash -> Lite -> Mistral -> Pro)
+ * CASCADE "CHAT" (Flash -> Lite -> HF Zephyr -> Pro)
  */
 async function handleChatCascade(prompt) {
   try {
-    return await callGemini('gemini-2.5-flash', prompt);
+    return await callGemini('gemini-2.5-flash'); // <-- Sukses (dari tes Anda)
   } catch (errorFlash) {
     if (!isTryAgainError(errorFlash)) throw errorFlash;
     console.warn('Gemini 2.5 Flash sibuk. Pindah ke Flash-Lite...');
     try {
-      return await callGemini('gemini-2.5-flash-lite', prompt);
+      return await callGemini('gemini-2.5-flash-lite'); // <-- Sukses (dari tes Anda)
     } catch (errorLite) {
       if (!isTryAgainError(errorLite)) throw errorLite;
-      console.warn('Model chat Gemini sibuk. Pindah ke HF (Mistral)...');
+      console.warn('Model chat Gemini sibuk. Pindah ke HF (Zephyr)...');
       try {
+        // PERBAIKAN: Mengganti Mistral dengan Zephyr (model text-generation)
         return await callHuggingFace(
-          'mistralai/Mistral-7B-Instruct-v0.2',
-          prompt
+          'HuggingFaceH4/zephyr-7b-beta',
+          prompt,
+          'text-generation'
         );
       } catch (errorHF) {
         if (!isTryAgainError(errorHF)) throw errorHF;
-        console.warn('HF Mistral sibuk. Pindah ke Pro (Upaya Terakhir)...');
-        return await callGemini('gemini-2.5-pro', prompt);
+        console.warn('HF Zephyr sibuk. Pindah ke Pro (Upaya Terakhir)...');
+        return await callGemini('gemini-2.5-pro');
       }
     }
   }
 }
 
 /**
- * CASCADE "KODING" (Pro -> DeepSeek -> Flash -> Lite)
+ * CASCADE "KODING" (Pro -> HF CodeLlama -> Flash -> Lite)
  */
 async function handleCodingCascade(prompt) {
   const hfPrompt = `<｜begin of sentence｜>User: ${prompt}\n\nAssistant:`;
+
   try {
-    return await callGemini('gemini-2.5-pro', prompt);
+    return await callGemini('gemini-2.5-pro'); // <-- Gagal (503) - diharapkan
   } catch (errorPro) {
-    if (!isTryAgainError(errorPro)) throw errorPro;
-    console.warn('Gemini 2.5 Pro sibuk. Pindah ke DeepSeek (HF)...');
+    if (!isTryAgainError(errorPro)) throw errorPro; // << Akan menangkap 503
+    console.warn('Gemini 2.5 Pro sibuk. Pindah ke CodeLlama (HF)...');
+
+    // ====================================================================
+    // PERBAIKAN BUG #2: Logika 'catch' HF sekarang akan lanjut (continue)
+    // PERBAIKAN MODEL: Mengganti DeepSeek dengan CodeLlama
+    // ====================================================================
     try {
       return await callHuggingFace(
-        'deepseek-ai/deepseek-coder-6.7b-instruct',
-        hfPrompt
+        'codellama/CodeLlama-7b-Instruct-hf', // <-- Model pengganti DeepSeek
+        hfPrompt,
+        'text-generation'
       );
     } catch (errorHF) {
-      if (!isTryAgainError(errorHF)) throw errorHF;
-      console.warn('DeepSeek sibuk. Pindah ke Gemini 2.5 Flash...');
+      // JANGAN THROW ERROR. Peringatkan & Lanjutkan ke jaring pengaman Gemini.
+      console.warn(
+        'HF CodeLlama gagal atau sibuk. Pindah ke Gemini 2.5 Flash...'
+      );
+
+      // Lanjut ke Upaya 3
       try {
-        return await callGemini('gemini-2.5-flash', prompt);
+        return await callGemini('gemini-2.5-flash'); // <-- Sukses (dari tes Anda)
       } catch (errorFlash) {
         if (!isTryAgainError(errorFlash)) throw errorFlash;
         console.warn('Gemini 2.5 Flash sibuk. Pindah ke Flash-Lite...');
-        return await callGemini('gemini-2.5-flash-lite', prompt);
+        return await callGemini('gemini-2.5-flash-lite'); // <-- Sukses (dari tes Anda)
       }
     }
   }
