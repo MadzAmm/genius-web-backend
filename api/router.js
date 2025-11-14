@@ -209,9 +209,9 @@
 // }
 
 // File: api/router.js
-// VERSI 17 (FINAL): Menerapkan skema cascade baru Anda
-// Chat: Gemini Flash -> Qwen -> Compound -> GPT-OSS
-// Kode: Gemini Pro -> GPT-OSS -> Qwen -> Compound
+// VERSI 18 (FINAL): Perbaikan Bug Kritis
+// 1. Memperbaiki logika 'catch' cascade koding agar *pasti* lanjut.
+// 2. Menambahkan jaring pengaman untuk 'Invalid JSON' (body-parser).
 
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const Groq = require('groq-sdk');
@@ -237,15 +237,41 @@ const runMiddleware = (req, res, fn) => {
 
 // --- 3. "SMART ROUTER" UTAMA ---
 export default async function handler(req, res) {
+  // Jalankan CORS Handler
   await runMiddleware(req, res, corsHandler);
 
+  // Keamanan
   if (req.method !== 'POST') {
     res.status(405).send({ error: 'Method Not Allowed' });
     return;
   }
 
+  // ====================================================================
+  // PERBAIKAN BUG #2: Menangani error 'Invalid JSON'
+  // ====================================================================
+  let task, prompt;
   try {
-    const { task, prompt } = req.body;
+    // Vercel seharusnya sudah mem-parse body, tapi kita amankan
+    if (typeof req.body === 'string') {
+      req.body = JSON.parse(req.body);
+    }
+    task = req.body.task;
+    prompt = req.body.prompt;
+
+    if (!task || !prompt) {
+      throw new Error('Input tidak valid: "task" dan "prompt" diperlukan.');
+    }
+  } catch (parseError) {
+    console.error('Gagal mem-parse JSON body:', parseError.message);
+    res
+      .status(400)
+      .json({ error: 'Invalid JSON', details: parseError.message });
+    return;
+  }
+  // ====================================================================
+
+  // Blok Try...Catch Utama untuk API
+  try {
     let responsePayload;
 
     // --- 4. LOGIKA ROUTER INTI ---
@@ -263,7 +289,6 @@ export default async function handler(req, res) {
         responsePayload = await handleCodingCascade(prompt);
         break;
 
-      // ... (Placeholder untuk task lain) ...
       default:
         res.status(400).json({ error: 'Task tidak dikenal' });
         return;
@@ -281,9 +306,6 @@ export default async function handler(req, res) {
 
 // --- 5. FUNGSI HELPER (LOGIKA INTI) ---
 
-/**
- * Helper generik untuk memanggil model Gemini
- */
 async function callGemini(modelName, prompt) {
   console.log(`(Cascade) Mencoba Gemini: ${modelName}...`);
   try {
@@ -293,14 +315,11 @@ async function callGemini(modelName, prompt) {
   } catch (error) {
     const enhancedError = new Error(error.message);
     enhancedError.status = error.status || error.cause?.status || 500;
-    console.error(`(Cascade) GAGAL di ${modelName}:`, enhancedError);
+    console.error(`(Cascade) GAGAL di ${modelName}:`, enhancedError.message);
     throw enhancedError;
   }
 }
 
-/**
- * Helper generik untuk memanggil API Groq
- */
 async function callGroq(modelName, systemPrompt, userPrompt) {
   console.log(`(Cascade) Mencoba Groq: ${modelName}...`);
   try {
@@ -315,48 +334,40 @@ async function callGroq(modelName, systemPrompt, userPrompt) {
       chatCompletion.choices[0]?.message?.content || 'Maaf, terjadi kesalahan.';
     return { reply_text: reply, source: modelName };
   } catch (error) {
-    console.error(`(Cascade) GAGAL di ${modelName}:`, error);
+    console.error(`(Cascade) GAGAL di ${modelName}:`, error.message);
     const enhancedError = new Error(error.message);
     enhancedError.status = error.status || 500;
     throw enhancedError;
   }
 }
 
-/**
- * Helper KUNCI: Memeriksa error 429 (Rate Limit) ATAU 503 (Overloaded)
- */
 function isTryAgainError(error) {
   const isRetryable = error && (error.status === 429 || error.status === 503);
   console.log(
-    `(Cascade) Mendeteksi error ${error.status}. Bisa dicoba lagi? ${isRetryable}`
+    `(Cascade) Mendeteksi error status ${error.status}. Bisa dicoba lagi? ${isRetryable}`
   );
   return isRetryable;
 }
 
-// --- 6. FUNGSI CASCADE (SKEMA ANDA YANG BARU) ---
+// --- 6. FUNGSI CASCADE (DENGAN PERBAIKAN BUG) ---
 
 /**
- * CASCADE "CHAT" (Revisi Anda)
- * Urutan: Gemini Flash -> Groq Qwen -> Groq Compound -> Groq GPT-OSS
+ * CASCADE "CHAT" (Gemini Flash -> Groq Qwen -> Groq Compound -> Groq GPT-OSS)
+ * (Logika ini sudah berfungsi berdasarkan laporan Anda, jadi kita biarkan)
  */
 async function handleChatCascade(prompt) {
   const systemPrompt = 'You are a helpful assistant.';
 
-  // === UPAYA 1: Gemini 2.5 Flash (10 RPM) ===
   try {
     return await callGemini('gemini-2.5-flash', prompt);
   } catch (errorFlash) {
-    if (!isTryAgainError(errorFlash)) throw errorFlash; // Gagal karena API Key salah, dll.
+    if (!isTryAgainError(errorFlash)) throw errorFlash;
     console.warn('Gemini Flash sibuk. Pindah ke Groq Qwen...');
-
-    // === UPAYA 2: Groq Qwen3-32B (1000 RPM) ===
     try {
       return await callGroq('qwen/qwen3-32b', systemPrompt, prompt);
     } catch (errorQwen) {
       if (!isTryAgainError(errorQwen)) throw errorQwen;
       console.warn('Groq Qwen sibuk. Pindah ke Groq Compound...');
-
-      // === UPAYA 3: Groq Compound (200 RPM) ===
       try {
         return await callGroq('groq/compound', systemPrompt, prompt);
       } catch (errorCompound) {
@@ -364,8 +375,6 @@ async function handleChatCascade(prompt) {
         console.warn(
           'Groq Compound gagal atau sibuk. Pindah ke Groq GPT-OSS...'
         );
-
-        // === UPAYA 4: Groq GPT-OSS 20B (1000 RPM - Jaring Pengaman Terakhir) ===
         return await callGroq('openai/gpt-oss-20b', systemPrompt, prompt);
       }
     }
@@ -373,8 +382,7 @@ async function handleChatCascade(prompt) {
 }
 
 /**
- * CASCADE "KODING" (Revisi Anda)
- * Urutan: Gemini Pro -> Groq GPT-OSS -> Groq Qwen -> Groq Compound
+ * CASCADE "KODING" (Gemini Pro -> Groq GPT-OSS -> Groq Qwen -> Groq Compound)
  */
 async function handleCodingCascade(prompt) {
   const systemPrompt = 'You are an expert coding assistant.';
@@ -383,24 +391,39 @@ async function handleCodingCascade(prompt) {
   try {
     return await callGemini('gemini-2.5-pro', prompt);
   } catch (errorPro) {
-    if (!isTryAgainError(errorPro)) throw errorPro; // Gagal karena API Key salah, dll.
+    if (!isTryAgainError(errorPro)) {
+      // Ini adalah error serius (API key salah, dll), hentikan cascade
+      throw errorPro;
+    }
     console.warn('Gemini Pro sibuk. Pindah ke Groq GPT-OSS...');
+
+    // ====================================================================
+    // PERBAIKAN BUG #1: 'catch' block untuk Groq sekarang akan MELANJUTKAN
+    // ====================================================================
 
     // === UPAYA 2: Groq GPT-OSS 20B (1000 RPM) ===
     try {
       return await callGroq('openai/gpt-oss-20b', systemPrompt, prompt);
     } catch (errorOSS) {
-      if (!isTryAgainError(errorOSS)) throw errorOSS;
-      console.warn('Groq GPT-OSS sibuk. Pindah ke Qwen...');
+      // JANGAN THROW ERROR. Peringatkan & Lanjutkan ke jaring pengaman berikutnya.
+      console.warn('Groq GPT-OSS gagal atau sibuk. Pindah ke Qwen...');
+      if (!isTryAgainError(errorOSS)) {
+        // Log error non-retryable, tapi tetap lanjut
+        console.error('Error non-retryable di GPT-OSS:', errorOSS.message);
+      }
 
       // === UPAYA 3: Groq Qwen3-32B (1000 RPM) ===
       try {
         return await callGroq('qwen/qwen3-32b', systemPrompt, prompt);
       } catch (errorQwen) {
-        if (!isTryAgainError(errorQwen)) throw errorQwen;
-        console.warn('Groq Qwen sibuk. Pindah ke Compound...');
+        // JANGAN THROW ERROR. Peringatkan & Lanjutkan.
+        console.warn('Groq Qwen gagal atau sibuk. Pindah ke Compound...');
+        if (!isTryAgainError(errorQwen)) {
+          console.error('Error non-retryable di Qwen:', errorQwen.message);
+        }
 
         // === UPAYA 4: Groq Compound (200 RPM - Jaring Pengaman Terakhir) ===
+        // Ini adalah upaya terakhir. Jika ini gagal, biarkan ia 'throw'
         return await callGroq('groq/compound', systemPrompt, prompt);
       }
     }
