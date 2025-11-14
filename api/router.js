@@ -208,25 +208,22 @@
 // }
 
 // File: api/router.js
-// VERSI 13 (FINAL): Sesuai Dokumen Groq
-// - Menggunakan nama model Groq yang benar (llama-3.3-70b-versatile & llama-3.1-8b-instant)
-//   berdasarkan file models.txt & feature-text-chat.txt
+// VERSI 14: Menambahkan Rute Debug untuk Tes Individual
+// (Gemini + Groq)
 
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const Groq = require('groq-sdk');
 const cors = require('cors');
 
 // --- 1. INISIALISASI KLIEN ---
-// Kunci API ini akan dibaca dari Vercel Environment Variables
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 // --- 2. KONFIGURASI CORS ---
-// Mengizinkan frontend Anda di GitHub Pages untuk memanggil backend ini.
 const GITHUB_PAGES_DOMAIN = 'https://MadzAmm.github.io';
 const corsHandler = cors({ origin: GITHUB_PAGES_DOMAIN });
 
-// Helper untuk middleware CORS di Vercel
+// Helper untuk middleware CORS
 const runMiddleware = (req, res, fn) => {
   return new Promise((resolve, reject) => {
     fn(req, res, (result) => {
@@ -251,6 +248,7 @@ export default async function handler(req, res) {
 
     // --- 4. LOGIKA ROUTER INTI ---
     switch (task) {
+      // == RUTE PRODUKSI (DENGAN CASCADE) ==
       case 'chat_general':
       case 'info_portofolio':
         const finalPrompt =
@@ -264,6 +262,33 @@ export default async function handler(req, res) {
         responsePayload = await handleCodingCascade(prompt);
         break;
 
+      // ===============================================
+      // == RUTE DEBUG (MEM-BYPASS CASCADE) ==
+      // ===============================================
+      case '_debug_gemini_pro':
+        responsePayload = await callGemini('gemini-2.5-pro', prompt);
+        break;
+      case '_debug_gemini_flash':
+        responsePayload = await callGemini('gemini-2.5-flash', prompt);
+        break;
+      case '_debug_gemini_lite':
+        responsePayload = await callGemini('gemini-2.5-flash-lite', prompt);
+        break;
+      case '_debug_groq_versatile': // Model Koding Groq
+        responsePayload = await callGroq(
+          'llama-3.3-70b-versatile',
+          'You are an expert coding assistant.',
+          prompt
+        );
+        break;
+      case '_debug_groq_instant': // Model Chat Cepat Groq
+        responsePayload = await callGroq(
+          'llama-3.1-8b-instant',
+          'You are a helpful assistant.',
+          prompt
+        );
+        break;
+
       // ... (Placeholder untuk task lain) ...
       default:
         res.status(400).json({ error: 'Task tidak dikenal' });
@@ -274,7 +299,7 @@ export default async function handler(req, res) {
   } catch (error) {
     console.error('Error di Smart Router:', error.message);
     res.status(500).json({
-      error: 'Semua model AI sedang sibuk atau gagal.',
+      error: 'Terjadi kesalahan di server',
       details: error.message,
     });
   }
@@ -307,18 +332,11 @@ async function callGroq(modelName, systemPrompt, userPrompt) {
   try {
     const chatCompletion = await groq.chat.completions.create({
       messages: [
-        {
-          role: 'system',
-          content: systemPrompt,
-        },
-        {
-          role: 'user',
-          content: userPrompt,
-        },
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
       ],
       model: modelName,
     });
-
     const reply =
       chatCompletion.choices[0]?.message?.content || 'Maaf, terjadi kesalahan.';
     return { reply_text: reply, source: modelName };
@@ -334,8 +352,6 @@ async function callGroq(modelName, systemPrompt, userPrompt) {
  * Helper untuk memeriksa error 429 (Rate Limit) atau 503 (Overloaded)
  */
 function isTryAgainError(error) {
-  // 429 adalah "Too Many Requests" resmi [cite: 389]
-  // 503 adalah error "Overloaded" yang kita lihat dari Gemini
   const isRetryable = error && (error.status === 429 || error.status === 503);
   console.log(
     `(Debug) Mendeteksi error ${error.status}. Apakah bisa dicoba lagi? ${isRetryable}`
@@ -343,7 +359,8 @@ function isTryAgainError(error) {
   return isRetryable;
 }
 
-// --- 6. FUNGSI CASCADE (SKEMA ANDA - VERSI DOKUMEN BENAR) ---
+// --- 6. FUNGSI CASCADE (SKEMA ANDA) ---
+// (Logika ini tetap sama persis seperti Versi 13)
 
 /**
  * CASCADE "CHAT" (Flash -> Lite -> Groq Instant -> Pro)
@@ -360,7 +377,6 @@ async function handleChatCascade(prompt) {
       if (!isTryAgainError(errorLite)) throw errorLite;
       console.warn('Model chat Gemini sibuk. Pindah ke Groq (Instant)...');
       try {
-        // Menggunakan model 'instant' dari models.txt [cite: 649]
         return await callGroq(
           'llama-3.1-8b-instant',
           'You are a helpful assistant.',
@@ -384,9 +400,7 @@ async function handleCodingCascade(prompt) {
   } catch (errorPro) {
     if (!isTryAgainError(errorPro)) throw errorPro;
     console.warn('Gemini 2.5 Pro sibuk. Pindah ke Groq (Versatile)...');
-
     try {
-      // Menggunakan model 'versatile' dari models.txt [cite: 655]
       return await callGroq(
         'llama-3.3-70b-versatile',
         'You are an expert coding assistant.',
@@ -396,8 +410,6 @@ async function handleCodingCascade(prompt) {
       console.warn(
         'Groq Versatile gagal atau sibuk. Pindah ke Gemini 2.5 Flash...'
       );
-
-      // Lanjut ke Upaya 3
       try {
         return await callGemini('gemini-2.5-flash');
       } catch (errorFlash) {
