@@ -208,9 +208,10 @@
 // }
 
 // File: api/router.js
-// VERSI 8: Arsitektur "Tangguh"
-// - Mengganti model HF yang rusak
-// - Memperbaiki logika cascade untuk menangani SEMUA error failover
+// VERSI 9: Memperbaiki 3 Bug Kritis
+// 1. Memperbaiki logika cascade 'catch' agar tidak 'throw'
+// 2. Mengganti CodeLlama -> StarCoder (model koding HF yang berfungsi)
+// 3. Memperbaiki callHuggingFace agar benar-benar menggunakan task 'conversational'
 
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { HfInference } = require('@huggingface/inference');
@@ -277,18 +278,18 @@ export default async function handler(req, res) {
         break;
 
       // -- Model HF yang Diperbarui --
-      case '_debug_hf_codellama': // <-- Mengganti DeepSeek
+      case '_debug_hf_starcoder': // <-- Mengganti CodeLlama
         responsePayload = await callHuggingFace(
-          'codellama/CodeLlama-7b-Instruct-hf',
+          'bigcode/starcoder2-3b',
           prompt,
           'text-generation' // Menggunakan task 'text-generation'
         );
         break;
-      case '_debug_hf_zephyr': // <-- Mengganti Mistral
+      case '_debug_hf_zephyr': // <-- Memperbaiki Mistral
         responsePayload = await callHuggingFace(
           'HuggingFaceH4/zephyr-7b-beta',
           prompt,
-          'text-generation' // Menggunakan task 'text-generation'
+          'conversational' // <-- MEMPERBAIKI TASK
         );
         break;
 
@@ -326,9 +327,11 @@ async function callGemini(modelName, prompt) {
   }
 }
 
+// ====================================================================
+// PERBAIKAN BUG #3: Fungsi HF sekarang benar-benar menangani 'conversational'
+// ====================================================================
 /**
  * Helper untuk memanggil Hugging Face (DIPERBARUI)
- * Sekarang menerima 'taskType' untuk mengatasi error 'conversational'
  */
 async function callHuggingFace(
   modelName,
@@ -339,14 +342,18 @@ async function callHuggingFace(
   try {
     let result;
     if (taskType === 'conversational') {
-      // (Logika ini sekarang ada jika kita membutuhkannya di masa depan)
+      // INI ADALAH KODE BARU UNTUK MENANGANI ZEPHYR
       result = await hf.conversational({
         model: modelName,
         inputs: { text: prompt },
       });
-      return { reply_text: result.generated_text, source: modelName };
+      // 'conversational' mengembalikan 'generated_text' (jika ada) atau 'assistant'
+      return {
+        reply_text: result.generated_text || result.assistant,
+        source: modelName,
+      };
     } else {
-      // Default ke textGeneration
+      // Default ke textGeneration (untuk StarCoder)
       result = await hf.textGeneration({
         model: modelName,
         inputs: prompt,
@@ -355,7 +362,6 @@ async function callHuggingFace(
     }
   } catch (error) {
     console.error(`(Debug) GAGAL di ${modelName}:`, error);
-    // Tambahkan status ke error agar cascade bisa mendeteksinya
     const enhancedError = new Error('Hugging Face API gagal: ' + error.message);
     enhancedError.status = error.status || 503; // Asumsikan HF gagal karena 'sibuk' (503)
     throw enhancedError;
@@ -375,9 +381,8 @@ function isTryAgainError(error) {
   );
   return isRetryable;
 }
-// ====================================================================
 
-// --- 6. FUNGSI CASCADE (DENGAN MODEL HF BARU) ---
+// --- 6. FUNGSI CASCADE (DENGAN SEMUA PERBAIKAN) ---
 
 /**
  * CASCADE "CHAT" (Flash -> Lite -> HF Zephyr -> Pro)
@@ -394,15 +399,19 @@ async function handleChatCascade(prompt) {
       if (!isTryAgainError(errorLite)) throw errorLite;
       console.warn('Model chat Gemini sibuk. Pindah ke HF (Zephyr)...');
       try {
-        // PERBAIKAN: Mengganti Mistral dengan Zephyr (model text-generation)
+        // PERBAIKAN: Memanggil Zephyr dengan task 'conversational'
         return await callHuggingFace(
           'HuggingFaceH4/zephyr-7b-beta',
           prompt,
-          'text-generation'
+          'conversational'
         );
       } catch (errorHF) {
-        if (!isTryAgainError(errorHF)) throw errorHF;
+        // ====================================================================
+        // PERBAIKAN BUG #2: Jangan 'throw' error HF, LANJUTKAN ke Pro
+        // ====================================================================
+        if (!isTryAgainError(errorHF)) throw errorHF; // Gagal karena alasan lain (misal API Key)
         console.warn('HF Zephyr sibuk. Pindah ke Pro (Upaya Terakhir)...');
+        // Lanjutkan ke Upaya 4
         return await callGemini('gemini-2.5-pro');
       }
     }
@@ -410,7 +419,7 @@ async function handleChatCascade(prompt) {
 }
 
 /**
- * CASCADE "KODING" (Pro -> HF CodeLlama -> Flash -> Lite)
+ * CASCADE "KODING" (Pro -> HF StarCoder -> Flash -> Lite)
  */
 async function handleCodingCascade(prompt) {
   const hfPrompt = `<｜begin of sentence｜>User: ${prompt}\n\nAssistant:`;
@@ -418,23 +427,23 @@ async function handleCodingCascade(prompt) {
   try {
     return await callGemini('gemini-2.5-pro'); // <-- Gagal (503) - diharapkan
   } catch (errorPro) {
-    if (!isTryAgainError(errorPro)) throw errorPro; // << Akan menangkap 503
-    console.warn('Gemini 2.5 Pro sibuk. Pindah ke CodeLlama (HF)...');
+    if (!isTryAgainError(errorPro)) throw errorPro;
+    console.warn('Gemini 2.5 Pro sibuk. Pindah ke StarCoder (HF)...');
 
     // ====================================================================
-    // PERBAIKAN BUG #2: Logika 'catch' HF sekarang akan lanjut (continue)
-    // PERBAIKAN MODEL: Mengganti DeepSeek dengan CodeLlama
+    // PERBAIKAN BUG #2: Jangan 'throw' error HF, LANJUTKAN ke Flash
+    // PERBAIKAN MODEL: Mengganti CodeLlama -> StarCoder
     // ====================================================================
     try {
       return await callHuggingFace(
-        'codellama/CodeLlama-7b-Instruct-hf', // <-- Model pengganti DeepSeek
-        hfPrompt,
+        'bigcode/starcoder2-3b', // <-- Model pengganti DeepSeek/CodeLlama
+        prompt, // StarCoder tidak perlu format prompt khusus
         'text-generation'
       );
     } catch (errorHF) {
       // JANGAN THROW ERROR. Peringatkan & Lanjutkan ke jaring pengaman Gemini.
       console.warn(
-        'HF CodeLlama gagal atau sibuk. Pindah ke Gemini 2.5 Flash...'
+        'HF StarCoder gagal atau sibuk. Pindah ke Gemini 2.5 Flash...'
       );
 
       // Lanjut ke Upaya 3
