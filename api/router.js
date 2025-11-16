@@ -250,6 +250,7 @@ const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 // Daftar domain yang kita izinkan
 const allowedOrigins = [
   'https://MadzAmm.github.io', // Frontend produksi Anda
+  'https://madzamm.github.io/',
   'http://localhost:5173', // Server development lokal Anda (Vite)
 ];
 
