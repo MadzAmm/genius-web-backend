@@ -231,22 +231,23 @@
 //
 //
 //
-const { GoogleGenerativeAI } = require('@google/generative-ai');
-const Groq = require('groq-sdk');
-// [BARU] Import Cerebras
-const Cerebras = require('@cerebras/cerebras_cloud_sdk');
-const { OpenRouter } = require('@openrouter/sdk');
-const cors = require('cors');
+// File: api/router.js
+// VERSI 22 (ALL-IN-ONE): Gemini + Groq + OpenRouter + Cerebras
+// Semua provider aktif dan siap digunakan.
 
-// --- 1. INISIALISASI KLIEN ---
+import { GoogleGenerativeAI } from '@google/generative-ai';
+import Groq from 'groq-sdk';
+import { OpenRouter } from '@openrouter/sdk';
+import Cerebras from '@cerebras/cerebras_cloud_sdk'; // <-- CEREBRAS KEMBALI
+import cors from 'cors';
+
+// --- 1. INISIALISASI SEMUA KLIEN ---
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-const cerebras = new Cerebras({
-  apiKey: process.env.CEREBRAS_API_KEY,
-});
 const openRouterClient = new OpenRouter({
   apiKey: process.env.OPENROUTER_API_KEY,
 });
+const cerebrasClient = new Cerebras({ apiKey: process.env.CEREBRAS_API_KEY }); // <-- INIT CEREBRAS
 
 // --- 2. KONFIGURASI CORS ---
 const allowedOrigins = [
@@ -266,6 +267,7 @@ const corsHandler = cors({
   },
 });
 
+// Helper Middleware
 const runMiddleware = (req, res, fn) => {
   return new Promise((resolve, reject) => {
     fn(req, res, (result) => {
@@ -291,25 +293,23 @@ export default async function handler(req, res) {
     }
     task = req.body.task;
     prompt = req.body.prompt;
-    if (!task || !prompt) {
-      throw new Error('Input tidak valid.');
-    }
-  } catch (parseError) {
-    res
-      .status(400)
-      .json({ error: 'Invalid JSON', details: parseError.message });
+    if (!task || !prompt) throw new Error('Input tidak valid.');
+  } catch (error) {
+    res.status(400).json({ error: 'Invalid JSON', details: error.message });
     return;
   }
 
   try {
     let responsePayload;
 
+    // --- 4. LOGIKA ROUTER ---
     switch (task) {
+      // === TASK UTAMA (CASCADE) ===
       case 'chat_general':
       case 'info_portofolio':
         const finalPrompt =
           task === 'info_portofolio'
-            ? `KONTEKS: [CV Anda...]. Pertanyaan: ${prompt}`
+            ? `KONTEKS: [CV Anda di sini...]. Pertanyaan: ${prompt}`
             : prompt;
         responsePayload = await handleChatCascade(finalPrompt);
         break;
@@ -318,14 +318,18 @@ export default async function handler(req, res) {
         responsePayload = await handleCodingCascade(prompt);
         break;
 
-      // ==========================================================
-      // --- [BARU] TASK DEBUG KHUSUS UNTUK CEREBRAS ---
-      // ==========================================================
-      case '_debug_cerebras':
-        // Kita tes menggunakan model Llama 3.1 8B yang sangat cepat
+      // === RUTE DEBUG (TESTING SATU PER SATU) ===
+      case '_debug_openrouter':
+        responsePayload = await callOpenRouter(
+          'meta-llama/llama-3.1-8b-instruct:free',
+          prompt
+        );
+        break;
+
+      case '_debug_cerebras': // <-- TASK KHUSUS CEREBRAS
+        // Menggunakan model Llama 3.1 8B di Cerebras (Super Cepat)
         responsePayload = await callCerebras('llama3.1-8b', prompt);
         break;
-      // ==========================================================
 
       default:
         res.status(400).json({ error: 'Task tidak dikenal' });
@@ -336,15 +340,14 @@ export default async function handler(req, res) {
   } catch (error) {
     console.error('Error di Smart Router:', error.message);
     res.status(500).json({
-      error: 'Terjadi kesalahan server.',
+      error: 'Semua model AI sedang sibuk atau gagal.',
       details: error.message,
     });
   }
 }
 
-// --- 5. FUNGSI HELPER ---
+// --- 5. FUNGSI HELPER (PEMANGGIL AI) ---
 
-// ... (Fungsi callGemini & callGroq LAMA Anda tetap di sini) ...
 async function callGemini(modelName, prompt) {
   console.log(`(Cascade) Mencoba Gemini: ${modelName}...`);
   try {
@@ -377,13 +380,32 @@ async function callGroq(modelName, systemPrompt, userPrompt) {
   }
 }
 
-// ==========================================================
-// --- [BARU] FUNGSI HELPER UNTUK CEREBRAS ---
-// ==========================================================
+async function callOpenRouter(modelName, prompt) {
+  console.log(`(Cascade) Mencoba OpenRouter: ${modelName}...`);
+  try {
+    const completion = await openRouterClient.chat.completions.create({
+      model: modelName,
+      messages: [{ role: 'user', content: prompt }],
+      extraHeaders: {
+        'HTTP-Referer': 'https://genius-web-portfolio.com',
+        'X-Title': 'Genius Web',
+      },
+    });
+    const reply = completion.choices[0]?.message?.content || 'No response.';
+    return { reply_text: reply, source: `openrouter/${modelName}` };
+  } catch (error) {
+    console.error('OpenRouter Error:', error);
+    const enhancedError = new Error(error.message);
+    enhancedError.status = error.status || 500;
+    throw enhancedError;
+  }
+}
+
+// [BARU] Fungsi Helper Cerebras
 async function callCerebras(modelName, prompt) {
   console.log(`(Debug) Mencoba Cerebras: ${modelName}...`);
   try {
-    const completion = await cerebras.chat.completions.create({
+    const completion = await cerebrasClient.chat.completions.create({
       messages: [{ role: 'user', content: prompt }],
       model: modelName,
     });
@@ -398,110 +420,68 @@ async function callCerebras(modelName, prompt) {
     throw enhancedError;
   }
 }
-// ==========================================================
-
-// --- FUNGSI HELPER BARU (Menggunakan @openrouter/sdk) ---
-async function callOpenRouter(modelName, prompt) {
-  console.log(`(Debug) Mencoba OpenRouter Native: ${modelName}...`);
-  try {
-    const completion = await openRouterClient.chat.completions.create({
-      model: modelName,
-      messages: [{ role: 'user', content: prompt }],
-      // Header tambahan untuk OpenRouter (Penting untuk ranking app Anda)
-      extraHeaders: {
-        'HTTP-Referer': 'https://genius-web-portfolio.com',
-        'X-Title': 'Genius Web Portfolio',
-      },
-    });
-
-    const reply =
-      completion.choices[0]?.message?.content || 'Tidak ada respons.';
-    return { reply_text: reply, source: `openrouter/${modelName}` };
-  } catch (error) {
-    console.error(`(Debug) GAGAL di OpenRouter:`, error);
-    const enhancedError = new Error(error.message);
-    enhancedError.status = error.status || 500;
-    throw enhancedError;
-  }
-}
-//=====================================================================
 
 function isTryAgainError(error) {
-  const status = error?.status;
-  return (
-    status === 429 ||
-    status === 503 ||
-    status === 500 ||
-    status === 502 ||
-    status === 504
-  );
+  const s = error?.status;
+  const isRetryable =
+    s === 429 || s === 503 || s === 500 || s === 502 || s === 504;
+  console.log(`(Cascade) Error status ${s}. Retry? ${isRetryable}`);
+  return isRetryable;
 }
 
-// --- 6. FUNGSI CASCADE (SKEMA ANDA) ---
-// (Tidak ada perubahan di sini)
+// --- 6. LOGIKA CASCADE ---
 
-/**
- * CASCADE "CHAT" (Revisi Anda)
- * Urutan: Gemini Flash -> Groq Compound -> Groq Qwen -> Groq GPT-OSS
- */
 async function handleChatCascade(prompt) {
-  const systemPrompt = 'You are a helpful assistant.';
+  const sys = 'You are a helpful assistant.';
 
   try {
     return await callGemini('gemini-2.5-flash', prompt);
-  } catch (errorFlash) {
-    if (!isTryAgainError(errorFlash)) throw errorFlash;
+  } catch (e1) {
+    if (!isTryAgainError(e1)) throw e1;
     console.warn('Gemini Flash sibuk. Pindah ke Groq Compound...');
+
     try {
-      return await callGroq('groq/compound', systemPrompt, prompt);
-    } catch (errorCompound) {
-      console.warn('Groq Compound gagal atau sibuk. Pindah ke Groq Qwen...');
-      if (!isTryAgainError(errorCompound)) {
-        console.error(
-          'Error non-retryable di Compound:',
-          errorCompound.message
-        );
-      }
+      return await callGroq('groq/compound', sys, prompt);
+    } catch (e2) {
+      console.warn('Groq Compound sibuk. Pindah ke Groq Qwen...');
+      if (!isTryAgainError(e2)) console.error('Groq Error:', e2.message);
+
       try {
-        return await callGroq('qwen/qwen3-32b', systemPrompt, prompt);
-      } catch (errorQwen) {
-        console.warn('Groq Qwen gagal atau sibuk. Pindah ke Groq GPT-OSS...');
-        if (!isTryAgainError(errorQwen)) {
-          console.error('Error non-retryable di Qwen:', errorQwen.message);
-        }
-        return await callGroq('openai/gpt-oss-20b', systemPrompt, prompt);
+        return await callGroq('qwen/qwen3-32b', sys, prompt);
+      } catch (e3) {
+        console.warn('Groq Qwen sibuk. Pindah ke OpenRouter...');
+        return await callOpenRouter(
+          'meta-llama/llama-3.1-8b-instruct:free',
+          prompt
+        );
       }
     }
   }
 }
 
-/**
- * CASCADE "KODING" (Revisi Anda)
- * Urutan: Gemini Pro -> Groq GPT-OSS -> Groq Qwen -> Groq Compound
- */
 async function handleCodingCascade(prompt) {
-  const systemPrompt = 'You are an expert coding assistant.';
+  const sys = 'You are an expert coding assistant.';
 
   try {
     return await callGemini('gemini-2.5-pro', prompt);
-  } catch (errorPro) {
-    if (!isTryAgainError(errorPro)) throw errorPro;
+  } catch (e1) {
+    if (!isTryAgainError(e1)) throw e1;
     console.warn('Gemini Pro sibuk. Pindah ke Groq GPT-OSS...');
+
     try {
-      return await callGroq('openai/gpt-oss-20b', systemPrompt, prompt);
-    } catch (errorOSS) {
-      console.warn('Groq GPT-OSS gagal atau sibuk. Pindah ke Qwen...');
-      if (!isTryAgainError(errorOSS)) {
-        console.error('Error non-retryable di GPT-OSS:', errorOSS.message);
-      }
+      return await callGroq('openai/gpt-oss-20b', sys, prompt);
+    } catch (e2) {
+      console.warn('Groq GPT-OSS sibuk. Pindah ke Groq Qwen...');
+      if (!isTryAgainError(e2)) console.error('Groq Error:', e2.message);
+
       try {
-        return await callGroq('qwen/qwen3-32b', systemPrompt, prompt);
-      } catch (errorQwen) {
-        console.warn('Groq Qwen gagal atau sibuk. Pindah ke Compound...');
-        if (!isTryAgainError(errorQwen)) {
-          console.error('Error non-retryable di Qwen:', errorQwen.message);
-        }
-        return await callGroq('groq/compound', systemPrompt, prompt);
+        return await callGroq('qwen/qwen3-32b', sys, prompt);
+      } catch (e3) {
+        console.warn('Groq Qwen sibuk. Pindah ke OpenRouter...');
+        return await callOpenRouter(
+          'meta-llama/llama-3.1-8b-instruct:free',
+          prompt
+        );
       }
     }
   }
