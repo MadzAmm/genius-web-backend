@@ -466,10 +466,7 @@ async function handleChatCascade(prompt) {
         console.warn(
           'Groq Qwen sibuk. Pindah ke OpenRouter (Jaring Pengaman)...'
         );
-        return await callOpenRouter(
-          'meta-llama/llama-3.1-8b-instruct:free',
-          prompt
-        );
+        return await callOpenRouter('deepseek/deepseek-r1:free', prompt);
       }
     }
   }
@@ -494,10 +491,7 @@ async function handleCodingCascade(prompt) {
         return await callGroq('qwen/qwen3-32b', sys, prompt);
       } catch (e3) {
         console.warn('Groq Qwen sibuk. Pindah ke OpenRouter...');
-        return await callOpenRouter(
-          'meta-llama/llama-3.1-8b-instruct:free',
-          prompt
-        );
+        return await callOpenRouter('deepseek/deepseek-r1:free', prompt);
       }
     }
   }
