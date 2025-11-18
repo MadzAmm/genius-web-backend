@@ -335,7 +335,7 @@ export default async function handler(req, res) {
       // === RUTE DEBUG ===
       case '_debug_openrouter':
         responsePayload = await callOpenRouter(
-          'meta-llama/llama-3.1-8b-instruct:free',
+          'deepseek/deepseek-r1:free',
           prompt
         );
         break;
