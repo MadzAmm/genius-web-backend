@@ -234,20 +234,34 @@
 // File: api/router.js
 // VERSI 22 (ALL-IN-ONE): Gemini + Groq + OpenRouter + Cerebras
 // Semua provider aktif dan siap digunakan.
+// File: api/router.js
+// VERSI 23 (FINAL STABIL):
+// - Mengganti @openrouter/sdk dengan 'openai' library (Standar Industri)
+// - Memperbaiki error 'undefined reading create'
+// - Tetap menyertakan Gemini, Groq, dan Cerebras
 
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import Groq from 'groq-sdk';
-import { OpenRouter } from '@openrouter/sdk';
-import Cerebras from '@cerebras/cerebras_cloud_sdk'; // <-- CEREBRAS KEMBALI
+import OpenAI from 'openai'; // <-- KITA GUNAKAN INI UNTUK OPENROUTER
+import Cerebras from '@cerebras/cerebras_cloud_sdk';
 import cors from 'cors';
 
-// --- 1. INISIALISASI SEMUA KLIEN ---
+// --- 1. INISIALISASI KLIEN ---
+
+// A. Google Gemini
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
+// B. Groq
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-const openRouterClient = new OpenRouter({
+
+// C. OpenRouter (Via OpenAI SDK - Cara Paling Stabil)
+const openRouterClient = new OpenAI({
+  baseURL: 'https://openrouter.ai/api/v1', // <-- KUNCI RAHASIANYA DI SINI
   apiKey: process.env.OPENROUTER_API_KEY,
 });
-const cerebrasClient = new Cerebras({ apiKey: process.env.CEREBRAS_API_KEY }); // <-- INIT CEREBRAS
+
+// D. Cerebras
+const cerebrasClient = new Cerebras({ apiKey: process.env.CEREBRAS_API_KEY });
 
 // --- 2. KONFIGURASI CORS ---
 const allowedOrigins = [
@@ -267,7 +281,6 @@ const corsHandler = cors({
   },
 });
 
-// Helper Middleware
 const runMiddleware = (req, res, fn) => {
   return new Promise((resolve, reject) => {
     fn(req, res, (result) => {
@@ -286,6 +299,7 @@ export default async function handler(req, res) {
     return;
   }
 
+  // Body Parser Safety
   let task, prompt;
   try {
     if (typeof req.body === 'string') {
@@ -318,7 +332,7 @@ export default async function handler(req, res) {
         responsePayload = await handleCodingCascade(prompt);
         break;
 
-      // === RUTE DEBUG (TESTING SATU PER SATU) ===
+      // === RUTE DEBUG ===
       case '_debug_openrouter':
         responsePayload = await callOpenRouter(
           'meta-llama/llama-3.1-8b-instruct:free',
@@ -326,8 +340,7 @@ export default async function handler(req, res) {
         );
         break;
 
-      case '_debug_cerebras': // <-- TASK KHUSUS CEREBRAS
-        // Menggunakan model Llama 3.1 8B di Cerebras (Super Cepat)
+      case '_debug_cerebras':
         responsePayload = await callCerebras('llama3.1-8b', prompt);
         break;
 
@@ -383,9 +396,11 @@ async function callGroq(modelName, systemPrompt, userPrompt) {
 async function callOpenRouter(modelName, prompt) {
   console.log(`(Cascade) Mencoba OpenRouter: ${modelName}...`);
   try {
+    // Menggunakan OpenAI SDK standard
     const completion = await openRouterClient.chat.completions.create({
       model: modelName,
       messages: [{ role: 'user', content: prompt }],
+      // Extra headers untuk OpenRouter rankings (Opsional tapi bagus)
       extraHeaders: {
         'HTTP-Referer': 'https://genius-web-portfolio.com',
         'X-Title': 'Genius Web',
@@ -401,7 +416,6 @@ async function callOpenRouter(modelName, prompt) {
   }
 }
 
-// [BARU] Fungsi Helper Cerebras
 async function callCerebras(modelName, prompt) {
   console.log(`(Debug) Mencoba Cerebras: ${modelName}...`);
   try {
@@ -409,7 +423,6 @@ async function callCerebras(modelName, prompt) {
       messages: [{ role: 'user', content: prompt }],
       model: modelName,
     });
-
     const reply =
       completion.choices[0]?.message?.content || 'Tidak ada respons.';
     return { reply_text: reply, source: `cerebras/${modelName}` };
@@ -423,6 +436,7 @@ async function callCerebras(modelName, prompt) {
 
 function isTryAgainError(error) {
   const s = error?.status;
+  // Tambahkan 401/403 sementara untuk debug, tapi standarnya 429/5xx
   const isRetryable =
     s === 429 || s === 503 || s === 500 || s === 502 || s === 504;
   console.log(`(Cascade) Error status ${s}. Retry? ${isRetryable}`);
@@ -449,7 +463,9 @@ async function handleChatCascade(prompt) {
       try {
         return await callGroq('qwen/qwen3-32b', sys, prompt);
       } catch (e3) {
-        console.warn('Groq Qwen sibuk. Pindah ke OpenRouter...');
+        console.warn(
+          'Groq Qwen sibuk. Pindah ke OpenRouter (Jaring Pengaman)...'
+        );
         return await callOpenRouter(
           'meta-llama/llama-3.1-8b-instruct:free',
           prompt
