@@ -240,13 +240,17 @@
 // - Memperbaiki error 'undefined reading create'
 // - Tetap menyertakan Gemini, Groq, dan Cerebras
 
+// File: api/router.js
+// VERSI 24 (ALL-STAR): Gemini + Groq + OpenRouter + Cerebras + SambaNova
+// Menggunakan 'openai' SDK untuk OpenRouter DAN SambaNova (Kompatibel)
+
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import Groq from 'groq-sdk';
-import OpenAI from 'openai'; // <-- KITA GUNAKAN INI UNTUK OPENROUTER
+import OpenAI from 'openai';
 import Cerebras from '@cerebras/cerebras_cloud_sdk';
 import cors from 'cors';
 
-// --- 1. INISIALISASI KLIEN ---
+// --- 1. INISIALISASI SEMUA KLIEN ---
 
 // A. Google Gemini
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -254,14 +258,20 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 // B. Groq
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-// C. OpenRouter (Via OpenAI SDK - Cara Paling Stabil)
+// C. OpenRouter (Via OpenAI SDK)
 const openRouterClient = new OpenAI({
-  baseURL: 'https://openrouter.ai/api/v1', // <-- KUNCI RAHASIANYA DI SINI
+  baseURL: 'https://openrouter.ai/api/v1',
   apiKey: process.env.OPENROUTER_API_KEY,
 });
 
 // D. Cerebras
 const cerebrasClient = new Cerebras({ apiKey: process.env.CEREBRAS_API_KEY });
+
+// E. [BARU] SambaNova (Via OpenAI SDK)
+const sambaNovaClient = new OpenAI({
+  baseURL: 'https://api.sambanova.ai/v1',
+  apiKey: process.env.SAMBANOVA_API_KEY,
+});
 
 // --- 2. KONFIGURASI CORS ---
 const allowedOrigins = [
@@ -332,10 +342,14 @@ export default async function handler(req, res) {
         responsePayload = await handleCodingCascade(prompt);
         break;
 
-      // === RUTE DEBUG ===
+      // === RUTE DEBUG (TESTING) ===
+      case '_debug_sambanova': // [BARU]
+        responsePayload = await callSambaNova('E5-Mistral-7B-Instruct', prompt);
+        break;
+
       case '_debug_openrouter':
         responsePayload = await callOpenRouter(
-          'deepseek/deepseek-r1:free',
+          'meta-llama/llama-3.1-8b-instruct:free',
           prompt
         );
         break;
@@ -359,6 +373,32 @@ export default async function handler(req, res) {
   }
 }
 
+// --- 5. FUNGSI HELPER (PEMANGGIL AI) ---
+
+// [BARU] Fungsi Helper SambaNova
+async function callSambaNova(modelName, prompt) {
+  console.log(`(Debug) Mencoba SambaNova: ${modelName}...`);
+  try {
+    const completion = await sambaNovaClient.chat.completions.create({
+      model: modelName,
+      messages: [
+        { role: 'system', content: 'You are a helpful assistant.' },
+        { role: 'user', content: prompt },
+      ],
+      temperature: 0.1,
+      top_p: 0.1,
+    });
+
+    const reply =
+      completion.choices[0]?.message?.content || 'Tidak ada respons.';
+    return { reply_text: reply, source: `sambanova/${modelName}` };
+  } catch (error) {
+    console.error(`(Debug) GAGAL di SambaNova:`, error);
+    const enhancedError = new Error(error.message);
+    enhancedError.status = error.status || 500;
+    throw enhancedError;
+  }
+}
 // --- 5. FUNGSI HELPER (PEMANGGIL AI) ---
 
 async function callGemini(modelName, prompt) {
