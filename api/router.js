@@ -235,16 +235,17 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const Groq = require('groq-sdk');
 // [BARU] Import Cerebras
 const Cerebras = require('@cerebras/cerebras_cloud_sdk');
+const { OpenRouter } = require('@openrouter/sdk');
 const cors = require('cors');
 
 // --- 1. INISIALISASI KLIEN ---
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-
-// [BARU] Inisialisasi Klien Cerebras
-// (Secara otomatis membaca CEREBRAS_API_KEY dari env)
 const cerebras = new Cerebras({
   apiKey: process.env.CEREBRAS_API_KEY,
+});
+const openRouterClient = new OpenRouter({
+  apiKey: process.env.OPENROUTER_API_KEY,
 });
 
 // --- 2. KONFIGURASI CORS ---
@@ -398,6 +399,32 @@ async function callCerebras(modelName, prompt) {
   }
 }
 // ==========================================================
+
+// --- FUNGSI HELPER BARU (Menggunakan @openrouter/sdk) ---
+async function callOpenRouter(modelName, prompt) {
+  console.log(`(Debug) Mencoba OpenRouter Native: ${modelName}...`);
+  try {
+    const completion = await openRouterClient.chat.completions.create({
+      model: modelName,
+      messages: [{ role: 'user', content: prompt }],
+      // Header tambahan untuk OpenRouter (Penting untuk ranking app Anda)
+      extraHeaders: {
+        'HTTP-Referer': 'https://genius-web-portfolio.com',
+        'X-Title': 'Genius Web Portfolio',
+      },
+    });
+
+    const reply =
+      completion.choices[0]?.message?.content || 'Tidak ada respons.';
+    return { reply_text: reply, source: `openrouter/${modelName}` };
+  } catch (error) {
+    console.error(`(Debug) GAGAL di OpenRouter:`, error);
+    const enhancedError = new Error(error.message);
+    enhancedError.status = error.status || 500;
+    throw enhancedError;
+  }
+}
+//=====================================================================
 
 function isTryAgainError(error) {
   const status = error?.status;

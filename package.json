@@ -12,6 +12,7 @@
   "dependencies": {
     "@cerebras/cerebras_cloud_sdk": "^1.59.0",
     "@google/generative-ai": "^0.24.1",
+    "@openrouter/sdk": "^0.1.13",
     "cors": "^2.8.5",
     "groq-sdk": "^0.35.0"
   }
