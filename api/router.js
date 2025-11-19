@@ -1028,6 +1028,7 @@ export default async function handler(req, res) {
     // D. LOGIKA HYBRID MEMORY & SUMMARY (Inject Disini)
     // ============================================================
     const KEEP_RAW_COUNT = 4; // 4 pesan terakhir dibiarkan mentah (kode terbaru)
+    let debugSummary = null; //DEBUG OTAK ===========================================1
 
     if (isHeavyContext(chatHistory) && chatHistory.length > KEEP_RAW_COUNT) {
       // 1. Pisahkan: Pesan Lama vs Pesan Baru
@@ -1036,7 +1037,7 @@ export default async function handler(req, res) {
 
       // 2. Panggil Petugas Summary (Menggunakan fungsi getSummaryFromAI yg punya cascade)
       const summary = await getSummaryFromAI(messagesToSummarize);
-
+      debugSummary = summary; //DEBUG OTAK ========================================2
       // 3. Masukkan Summary ke System Prompt
       systemInstruction += `\n\n[CONTEXT SUMMARY]:\n${summary}\n(Gunakan informasi ini sebagai ingatan dan konteks percakapan sebelumnya).`;
 
@@ -1066,14 +1067,27 @@ export default async function handler(req, res) {
       // Chat General
       responsePayload = await handleChatCascade(chatHistory, systemInstruction);
     }
-
-    res.status(200).json(responsePayload);
+    //DEBUG OTAK============3
+    res.status(200).json({
+      ...responsePayload, // Isinya: reply_text, source
+      // Sisipkan Laporan Debug:
+      used_summary: debugSummary, // Akan null jika tidak di-summary, berisi teks jika di-summary
+      is_context_heavy: !!debugSummary, // True jika summary aktif
+    });
   } catch (error) {
     console.error('Error di Smart Router:', error.message);
     res.status(500).json({
       error: 'Semua model AI sedang sibuk atau gagal.',
       details: error.message,
     });
+    //================
+    //   res.status(200).json(responsePayload);
+    // } catch (error) {
+    //   console.error('Error di Smart Router:', error.message);
+    //   res.status(500).json({
+    //     error: 'Semua model AI sedang sibuk atau gagal.',
+    //     details: error.message,
+    //   });
   }
 }
 
