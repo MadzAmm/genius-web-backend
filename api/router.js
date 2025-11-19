@@ -243,6 +243,40 @@
 // File: api/router.js
 // VERSI 24 (ALL-STAR): Gemini + Groq + OpenRouter + Cerebras + SambaNova
 // Menggunakan 'openai' SDK untuk OpenRouter DAN SambaNova (Kompatibel)
+// File: api/router.js
+// VERSI 27 (THE ULTIMATE ALL-IN-ONE):
+// Integrasi Lengkap: Gemini, Groq, OpenRouter, Cerebras, SambaNova, Cloudflare
+// Fitur: Shortcut (@), Debug Routes, dan Cascade Berlapis.
+
+// List provider dan model yang digunakan:
+// 1. groq 'https://console.groq.com/docs/rate-limits'
+//     a. groq/compound
+//     b. qwen/qwen3-32b
+//     c. openai/gpt-oss-120b
+// 2. Gemini 'https://ai.google.dev/gemini-api/docs/rate-limits?hl=id'
+//     a. gemini-2.5-pro
+//     b. gemini-2.5-Flash
+// 3. cerebras 'https://cloud.cerebras.ai/platform/org_p2d5xxc3ymmxmnyctfmycfwn/models'
+//     a. gpt-oss-120b
+//     b. llama-3.3-70b
+//     c. qwen-3-235b-a22b-instruct-2507
+// 4. openrouter 'https://openrouter.ai/docs/api-reference/limits'
+//     a. openrouter/sherlock-dash-alpha
+//     b. mistralai/mistral-7b-instruct:free
+//     c. deepseek/deepseek-r1-distill-llama-70b:free
+//     d. meta-llama/llama-3.3-70b-instruct:free
+//     e. qwen/qwen3-coder:free
+// 5. Sambanova 'https://docs.sambanova.ai/docs/en/models/rate-limits#free-tier'
+//     a. DeepSeek-R1
+//     b. DeepSeek-R1-Distill-Llama-70B
+//     c. Meta-Llama-3.3-70B-Instruct
+// 6. cloudflare 'https://developers.cloudflare.com/workers-ai/platform/limits/'
+//     a. @cf/openai/gpt-oss-120b
+//     b. @cf/meta/llama-3.3-70b-instruct-fp8-fast
+//     c. @cf/mistralai/mistral-small-3.1-24b-instruct
+// File: api/router.js
+// VERSI MEGA-CASCADE: Integrasi 6 Provider dengan Daftar Model Lengkap
+// Menggunakan sistem Loop Cascade untuk efisiensi penanganan banyak model.
 
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import Groq from 'groq-sdk';
@@ -250,7 +284,9 @@ import OpenAI from 'openai';
 import Cerebras from '@cerebras/cerebras_cloud_sdk';
 import cors from 'cors';
 
-// --- 1. INISIALISASI SEMUA KLIEN ---
+// ====================================================================
+// --- 1. INISIALISASI KLIEN ---
+// ====================================================================
 
 // A. Google Gemini
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -258,29 +294,30 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 // B. Groq
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-// C. OpenRouter
+// C. OpenRouter (Via OpenAI SDK)
 const openRouterClient = new OpenAI({
   baseURL: 'https://openrouter.ai/api/v1',
   apiKey: process.env.OPENROUTER_API_KEY,
 });
 
-// D. Cerebras
+// D. Cerebras (Native SDK)
 const cerebrasClient = new Cerebras({ apiKey: process.env.CEREBRAS_API_KEY });
 
-// E. SambaNova
+// E. SambaNova (Via OpenAI SDK)
 const sambaNovaClient = new OpenAI({
   baseURL: 'https://api.sambanova.ai/v1',
   apiKey: process.env.SAMBANOVA_API_KEY,
 });
 
-// F. [BARU] Cloudflare Workers AI (Via OpenAI SDK)
+// F. Cloudflare Workers AI (Via OpenAI SDK)
 const cloudflareClient = new OpenAI({
-  // Perhatikan format URL ini, butuh Account ID
   baseURL: `https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/ai/v1`,
   apiKey: process.env.CLOUDFLARE_API_TOKEN,
 });
 
+// ====================================================================
 // --- 2. KONFIGURASI CORS ---
+// ====================================================================
 const allowedOrigins = [
   'https://MadzAmm.github.io',
   'https://madzamm.github.io',
@@ -307,7 +344,9 @@ const runMiddleware = (req, res, fn) => {
   });
 };
 
+// ====================================================================
 // --- 3. "SMART ROUTER" UTAMA ---
+// ====================================================================
 export default async function handler(req, res) {
   await runMiddleware(req, res, corsHandler);
 
@@ -316,6 +355,7 @@ export default async function handler(req, res) {
     return;
   }
 
+  // Body Parser Safety
   let task, prompt;
   try {
     if (typeof req.body === 'string') {
@@ -330,10 +370,15 @@ export default async function handler(req, res) {
   }
 
   try {
+    // Cek Shortcut terlebih dahulu
+    const shortcutResult = await handleShortcut(prompt);
+    if (shortcutResult) {
+      return res.status(200).json(shortcutResult);
+    }
+
     let responsePayload;
 
     switch (task) {
-      // === TASK UTAMA (CASCADE) ===
       case 'chat_general':
       case 'info_portofolio':
         const finalPrompt =
@@ -345,33 +390,6 @@ export default async function handler(req, res) {
 
       case 'assistent_coding':
         responsePayload = await handleCodingCascade(prompt);
-        break;
-
-      // === RUTE DEBUG (TESTING) ===
-      case '_debug_cloudflare': // [BARU]
-        // Cloudflare menggunakan nama model dengan @cf/
-        responsePayload = await callCloudflare(
-          '@cf/meta/llama-3-8b-instruct',
-          prompt
-        );
-        break;
-
-      case '_debug_sambanova':
-        responsePayload = await callSambaNova(
-          'Meta-Llama-3.1-8B-Instruct',
-          prompt
-        );
-        break;
-
-      case '_debug_openrouter':
-        responsePayload = await callOpenRouter(
-          'meta-llama/llama-3.1-8b-instruct:free',
-          prompt
-        );
-        break;
-
-      case '_debug_cerebras':
-        responsePayload = await callCerebras('llama3.1-8b', prompt);
         break;
 
       default:
@@ -389,65 +407,276 @@ export default async function handler(req, res) {
   }
 }
 
-// --- 5. FUNGSI HELPER (PEMANGGIL AI) ---
+// ====================================================================
+// --- 4. SISTEM CASCADE (ENGINE BARU) ---
+// ====================================================================
 
-// [BARU] Fungsi Helper Cloudflare
-async function callCloudflare(modelName, prompt) {
-  console.log(`(Debug) Mencoba Cloudflare: ${modelName}...`);
-  try {
-    const completion = await cloudflareClient.chat.completions.create({
-      model: modelName,
-      messages: [
-        { role: 'system', content: 'You are a helpful assistant.' },
-        { role: 'user', content: prompt },
-      ],
-    });
+// Helper untuk menjalankan daftar model secara berurutan (Looping)
+async function runCascadeStrategy(
+  strategyName,
+  steps,
+  prompt,
+  systemInstruction
+) {
+  let lastError = null;
 
-    const reply =
-      completion.choices[0]?.message?.content || 'Tidak ada respons.';
-    return { reply_text: reply, source: `cloudflare/${modelName}` };
-  } catch (error) {
-    console.error(`(Debug) GAGAL di Cloudflare:`, error);
-    const enhancedError = new Error(error.message);
-    enhancedError.status = error.status || 500;
-    throw enhancedError;
+  console.log(
+    `=== Memulai Cascade: ${strategyName} (${steps.length} langkah) ===`
+  );
+
+  for (const step of steps) {
+    try {
+      // Jalankan fungsi pemanggil model
+      return await step.fn(step.model, prompt, systemInstruction);
+    } catch (error) {
+      lastError = error;
+      // Cek apakah error "bisa dimaklumi" (Rate Limit / Server Error)
+      if (isTryAgainError(error)) {
+        console.warn(
+          `[${strategyName}] Gagal di ${step.provider}/${step.model}. Pindah ke berikutnya...`
+        );
+        continue; // Lanjut ke model berikutnya di list
+      } else {
+        // Jika error fatal (misal API Key salah), berhenti dan lempar error
+        console.error(
+          `[${strategyName}] Error Fatal di ${step.provider}/${step.model}:`,
+          error.message
+        );
+        throw error;
+      }
+    }
   }
+
+  // Jika semua gagal
+  console.error(`[${strategyName}] Semua model gagal.`);
+  throw new Error(
+    `Semua model di cascade ${strategyName} gagal. Terakhir: ${lastError?.message}`
+  );
 }
 
-// --- 5. FUNGSI HELPER (PEMANGGIL AI) ---
+/**
+ * CASCADE CHAT GENERAL
+ * Urutan: Gemini Flash -> Groq Qwen -> Cerebras Llama -> SambaNova Llama -> Cloudflare Llama -> ... sisanya
+ */
+async function handleChatCascade(prompt) {
+  const sys = 'You are a helpful assistant.';
 
-// [BARU] Fungsi Helper SambaNova
-async function callSambaNova(modelName, prompt) {
-  console.log(`(Debug) Mencoba SambaNova: ${modelName}...`);
-  try {
-    const completion = await sambaNovaClient.chat.completions.create({
-      model: modelName,
-      messages: [
-        { role: 'system', content: 'You are a helpful assistant.' },
-        { role: 'user', content: prompt },
-      ],
-      temperature: 0.1,
-      top_p: 0.1,
-    });
+  // DAFTAR URUTAN PRIORITAS (Sesuai List Anda)
+  const steps = [
+    // 1. Gemini (Cepat & Stabil)
+    { provider: 'Gemini', model: 'gemini-2.5-flash', fn: callGemini },
 
-    const reply =
-      completion.choices[0]?.message?.content || 'Tidak ada respons.';
-    return { reply_text: reply, source: `sambanova/${modelName}` };
-  } catch (error) {
-    console.error(`(Debug) GAGAL di SambaNova:`, error);
-    const enhancedError = new Error(error.message);
-    enhancedError.status = error.status || 500;
-    throw enhancedError;
-  }
+    // 2. Groq (Super Cepat)
+    { provider: 'Groq', model: 'qwen/qwen3-32b', fn: callGroq }, // ID dari user
+    { provider: 'Groq', model: 'groq/compound', fn: callGroq },
+
+    // 3. Cerebras (Super Cepat)
+    { provider: 'Cerebras', model: 'llama-3.3-70b', fn: callCerebras },
+
+    // 4. SambaNova (Cepat)
+    {
+      provider: 'SambaNova',
+      model: 'Meta-Llama-3.3-70B-Instruct',
+      fn: callSambaNova,
+    },
+
+    // 5. Cloudflare
+    {
+      provider: 'Cloudflare',
+      model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+      fn: callCloudflare,
+    },
+
+    // 6. OpenRouter (Free Tier)
+    {
+      provider: 'OpenRouter',
+      model: 'meta-llama/llama-3.3-70b-instruct:free',
+      fn: callOpenRouter,
+    },
+
+    // --- JARING PENGAMAN LAPIS KEDUA ---
+
+    // 7. Gemini Pro (Kualitas Tinggi)
+    { provider: 'Gemini', model: 'gemini-2.5-pro', fn: callGemini },
+
+    // 8. Groq (Backup)
+    { provider: 'Groq', model: 'openai/gpt-oss-120b', fn: callGroq },
+
+    // 9. Cerebras (Backup)
+    { provider: 'Cerebras', model: 'gpt-oss-120b', fn: callCerebras },
+
+    // 10. OpenRouter (Backup)
+    {
+      provider: 'OpenRouter',
+      model: 'deepseek/deepseek-r1-distill-llama-70b:free',
+      fn: callOpenRouter,
+    },
+    {
+      provider: 'OpenRouter',
+      model: 'mistralai/mistral-7b-instruct:free',
+      fn: callOpenRouter,
+    },
+
+    // 11. Cloudflare (Backup)
+    {
+      provider: 'Cloudflare',
+      model: '@cf/mistralai/mistral-small-3.1-24b-instruct',
+      fn: callCloudflare,
+    },
+    {
+      provider: 'Cloudflare',
+      model: '@cf/openai/gpt-oss-120b',
+      fn: callCloudflare,
+    },
+
+    // 12. OpenRouter (Terakhir - Experimental)
+    {
+      provider: 'OpenRouter',
+      model: 'openrouter/sherlock-dash-alpha',
+      fn: callOpenRouter,
+    },
+  ];
+
+  return await runCascadeStrategy('Chat General', steps, prompt, sys);
 }
-// --- 5. FUNGSI HELPER (PEMANGGIL AI) ---
+
+/**
+ * CASCADE CODING
+ * Fokus: Kemampuan Koding & Reasoning
+ */
+async function handleCodingCascade(prompt) {
+  const sys = 'You are an expert coding assistant.';
+
+  const steps = [
+    // 1. Gemini Pro (Otak Terbaik)
+    { provider: 'Gemini', model: 'gemini-2.5-pro', fn: callGemini },
+
+    // 2. SambaNova (DeepSeek R1 - Reasoning Kuat)
+    { provider: 'SambaNova', model: 'DeepSeek-R1', fn: callSambaNova },
+    {
+      provider: 'SambaNova',
+      model: 'DeepSeek-R1-Distill-Llama-70B',
+      fn: callSambaNova,
+    },
+
+    // 3. OpenRouter (Qwen Coder - Spesialis Koding)
+    {
+      provider: 'OpenRouter',
+      model: 'qwen/qwen3-coder:free',
+      fn: callOpenRouter,
+    },
+
+    // 4. Cerebras (Model Besar)
+    {
+      provider: 'Cerebras',
+      model: 'qwen-3-235b-a22b-instruct-2507',
+      fn: callCerebras,
+    },
+    { provider: 'Cerebras', model: 'gpt-oss-120b', fn: callCerebras },
+
+    // 5. Groq
+    { provider: 'Groq', model: 'qwen/qwen3-32b', fn: callGroq },
+
+    // 6. Cloudflare
+    {
+      provider: 'Cloudflare',
+      model: '@cf/openai/gpt-oss-120b',
+      fn: callCloudflare,
+    },
+
+    // 7. OpenRouter DeepSeek (Backup)
+    {
+      provider: 'OpenRouter',
+      model: 'deepseek/deepseek-r1-distill-llama-70b:free',
+      fn: callOpenRouter,
+    },
+
+    // 8. Gemini Flash (Jaring Pengaman Terakhir)
+    { provider: 'Gemini', model: 'gemini-2.5-flash', fn: callGemini },
+  ];
+
+  return await runCascadeStrategy('Coding Assistant', steps, prompt, sys);
+}
+
+// ====================================================================
+// --- 5. LOGIKA SHORTCUT (JALAN PINTAS) ---
+// ====================================================================
+async function handleShortcut(fullPrompt) {
+  // Format: @provider-model_singkat
+  const shortcuts = {
+    // Groq
+    '@groq-compound': (p) => callGroq('groq/compound', 'Helpful', p),
+    '@groq-qwen': (p) => callGroq('qwen/qwen3-32b', 'Helpful', p),
+    '@groq-gpt': (p) => callGroq('openai/gpt-oss-120b', 'Helpful', p),
+
+    // Gemini
+    '@gemini-pro': (p) => callGemini('gemini-2.5-pro', p),
+    '@gemini-flash': (p) => callGemini('gemini-2.5-flash', p),
+
+    // Cerebras
+    '@cerebras-gpt': (p) => callCerebras('gpt-oss-120b', p),
+    '@cerebras-llama': (p) => callCerebras('llama-3.3-70b', p),
+    '@cerebras-qwen': (p) => callCerebras('qwen-3-235b-a22b-instruct-2507', p),
+
+    // OpenRouter
+    '@router-sherlock': (p) =>
+      callOpenRouter('openrouter/sherlock-dash-alpha', p),
+    '@router-mistral': (p) =>
+      callOpenRouter('mistralai/mistral-7b-instruct:free', p),
+    '@router-deepseek': (p) =>
+      callOpenRouter('deepseek/deepseek-r1-distill-llama-70b:free', p),
+    '@router-llama': (p) =>
+      callOpenRouter('meta-llama/llama-3.3-70b-instruct:free', p),
+    '@router-coder': (p) => callOpenRouter('qwen/qwen3-coder:free', p),
+
+    // SambaNova
+    '@nova-r1': (p) => callSambaNova('DeepSeek-R1', p),
+    '@nova-deepseek': (p) => callSambaNova('DeepSeek-R1-Distill-Llama-70B', p),
+    '@nova-llama': (p) => callSambaNova('Meta-Llama-3.3-70B-Instruct', p),
+
+    // Cloudflare
+    '@cf-gpt': (p) => callCloudflare('@cf/openai/gpt-oss-120b', p),
+    '@cf-llama': (p) =>
+      callCloudflare('@cf/meta/llama-3.3-70b-instruct-fp8-fast', p),
+    '@cf-mistral': (p) =>
+      callCloudflare('@cf/mistralai/mistral-small-3.1-24b-instruct', p),
+  };
+
+  for (const [prefix, handler] of Object.entries(shortcuts)) {
+    if (fullPrompt.trim().toLowerCase().startsWith(prefix)) {
+      const cleanPrompt = fullPrompt.slice(prefix.length).trim();
+      console.log(`(Shortcut) Terdeteksi ${prefix}. Bypass cascade...`);
+      return await handler(cleanPrompt);
+    }
+  }
+  return null;
+}
+
+// ====================================================================
+// --- 6. FUNGSI HELPER (PEMANGGIL API) ---
+// ====================================================================
+
+function isTryAgainError(error) {
+  const s = error?.status;
+  const isRetryable =
+    s === 429 || s === 503 || s === 500 || s === 502 || s === 504;
+  // Log error untuk debugging di Vercel Logs
+  if (isRetryable)
+    console.log(
+      `(Error Check) Status ${s} terdeteksi. Mencoba provider berikutnya.`
+    );
+  return isRetryable;
+}
 
 async function callGemini(modelName, prompt) {
-  console.log(`(Cascade) Mencoba Gemini: ${modelName}...`);
+  console.log(`(Call) Mencoba Gemini: ${modelName}...`);
   try {
     const model = genAI.getGenerativeModel({ model: modelName });
     const result = await model.generateContent(prompt);
-    return { reply_text: result.response.text(), source: modelName };
+    return {
+      reply_text: result.response.text(),
+      source: `Google (${modelName})`,
+    };
   } catch (error) {
     const enhancedError = new Error(error.message);
     enhancedError.status = error.status || error.cause?.status || 500;
@@ -456,7 +685,7 @@ async function callGemini(modelName, prompt) {
 }
 
 async function callGroq(modelName, systemPrompt, userPrompt) {
-  console.log(`(Cascade) Mencoba Groq: ${modelName}...`);
+  console.log(`(Call) Mencoba Groq: ${modelName}...`);
   try {
     const chatCompletion = await groq.chat.completions.create({
       messages: [
@@ -466,7 +695,44 @@ async function callGroq(modelName, systemPrompt, userPrompt) {
       model: modelName,
     });
     const reply = chatCompletion.choices[0]?.message?.content || 'Maaf, error.';
-    return { reply_text: reply, source: modelName };
+    return { reply_text: reply, source: `Groq (${modelName})` };
+  } catch (error) {
+    const enhancedError = new Error(error.message);
+    enhancedError.status = error.status || 500;
+    throw enhancedError;
+  }
+}
+
+async function callSambaNova(modelName, prompt) {
+  console.log(`(Call) Mencoba SambaNova: ${modelName}...`);
+  try {
+    const completion = await sambaNovaClient.chat.completions.create({
+      model: modelName,
+      messages: [
+        { role: 'system', content: 'You are a helpful assistant.' },
+        { role: 'user', content: prompt },
+      ],
+      temperature: 0.6,
+      top_p: 0.9,
+    });
+    const reply = completion.choices[0]?.message?.content || 'No response.';
+    return { reply_text: reply, source: `SambaNova (${modelName})` };
+  } catch (error) {
+    const enhancedError = new Error(error.message);
+    enhancedError.status = error.status || 500;
+    throw enhancedError;
+  }
+}
+
+async function callCerebras(modelName, prompt) {
+  console.log(`(Call) Mencoba Cerebras: ${modelName}...`);
+  try {
+    const completion = await cerebrasClient.chat.completions.create({
+      messages: [{ role: 'user', content: prompt }],
+      model: modelName,
+    });
+    const reply = completion.choices[0]?.message?.content || 'No response.';
+    return { reply_text: reply, source: `Cerebras (${modelName})` };
   } catch (error) {
     const enhancedError = new Error(error.message);
     enhancedError.status = error.status || 500;
@@ -475,105 +741,37 @@ async function callGroq(modelName, systemPrompt, userPrompt) {
 }
 
 async function callOpenRouter(modelName, prompt) {
-  console.log(`(Cascade) Mencoba OpenRouter: ${modelName}...`);
+  console.log(`(Call) Mencoba OpenRouter: ${modelName}...`);
   try {
-    // Menggunakan OpenAI SDK standard
     const completion = await openRouterClient.chat.completions.create({
       model: modelName,
       messages: [{ role: 'user', content: prompt }],
-      // Extra headers untuk OpenRouter rankings (Opsional tapi bagus)
       extraHeaders: {
         'HTTP-Referer': 'https://genius-web-portfolio.com',
         'X-Title': 'Genius Web',
       },
     });
     const reply = completion.choices[0]?.message?.content || 'No response.';
-    return { reply_text: reply, source: `openrouter/${modelName}` };
+    return { reply_text: reply, source: `OpenRouter (${modelName})` };
   } catch (error) {
-    console.error('OpenRouter Error:', error);
     const enhancedError = new Error(error.message);
     enhancedError.status = error.status || 500;
     throw enhancedError;
   }
 }
 
-async function callCerebras(modelName, prompt) {
-  console.log(`(Debug) Mencoba Cerebras: ${modelName}...`);
+async function callCloudflare(modelName, prompt) {
+  console.log(`(Call) Mencoba Cloudflare: ${modelName}...`);
   try {
-    const completion = await cerebrasClient.chat.completions.create({
-      messages: [{ role: 'user', content: prompt }],
+    const completion = await cloudflareClient.chat.completions.create({
       model: modelName,
+      messages: [{ role: 'user', content: prompt }],
     });
-    const reply =
-      completion.choices[0]?.message?.content || 'Tidak ada respons.';
-    return { reply_text: reply, source: `cerebras/${modelName}` };
+    const reply = completion.choices[0]?.message?.content || 'No response.';
+    return { reply_text: reply, source: `Cloudflare (${modelName})` };
   } catch (error) {
-    console.error(`(Debug) GAGAL di Cerebras:`, error);
     const enhancedError = new Error(error.message);
     enhancedError.status = error.status || 500;
     throw enhancedError;
-  }
-}
-
-function isTryAgainError(error) {
-  const s = error?.status;
-  // Tambahkan 401/403 sementara untuk debug, tapi standarnya 429/5xx
-  const isRetryable =
-    s === 429 || s === 503 || s === 500 || s === 502 || s === 504;
-  console.log(`(Cascade) Error status ${s}. Retry? ${isRetryable}`);
-  return isRetryable;
-}
-
-// --- 6. LOGIKA CASCADE ---
-
-async function handleChatCascade(prompt) {
-  const sys = 'You are a helpful assistant.';
-
-  try {
-    return await callGemini('gemini-2.5-flash', prompt);
-  } catch (e1) {
-    if (!isTryAgainError(e1)) throw e1;
-    console.warn('Gemini Flash sibuk. Pindah ke Groq Compound...');
-
-    try {
-      return await callGroq('groq/compound', sys, prompt);
-    } catch (e2) {
-      console.warn('Groq Compound sibuk. Pindah ke Groq Qwen...');
-      if (!isTryAgainError(e2)) console.error('Groq Error:', e2.message);
-
-      try {
-        return await callGroq('qwen/qwen3-32b', sys, prompt);
-      } catch (e3) {
-        console.warn(
-          'Groq Qwen sibuk. Pindah ke OpenRouter (Jaring Pengaman)...'
-        );
-        return await callOpenRouter('deepseek/deepseek-r1:free', prompt);
-      }
-    }
-  }
-}
-
-async function handleCodingCascade(prompt) {
-  const sys = 'You are an expert coding assistant.';
-
-  try {
-    return await callGemini('gemini-2.5-pro', prompt);
-  } catch (e1) {
-    if (!isTryAgainError(e1)) throw e1;
-    console.warn('Gemini Pro sibuk. Pindah ke Groq GPT-OSS...');
-
-    try {
-      return await callGroq('openai/gpt-oss-20b', sys, prompt);
-    } catch (e2) {
-      console.warn('Groq GPT-OSS sibuk. Pindah ke Groq Qwen...');
-      if (!isTryAgainError(e2)) console.error('Groq Error:', e2.message);
-
-      try {
-        return await callGroq('qwen/qwen3-32b', sys, prompt);
-      } catch (e3) {
-        console.warn('Groq Qwen sibuk. Pindah ke OpenRouter...');
-        return await callOpenRouter('deepseek/deepseek-r1:free', prompt);
-      }
-    }
   }
 }
