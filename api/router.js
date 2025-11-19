@@ -690,6 +690,7 @@ function isTryAgainError(error) {
     s === 404 || // Not Found (Model tidak ada/salah nama)
     s === 408 || // Request Timeout
     s === 410 || // Gone (Model Deprecated/Removed - KHUSUS SAMBANOVA)
+    s === 413 || //Request Entity Too Large (Muatan atau prompt Terlalu Besar)
     s === 429 || // Rate Limit (Umum)
     s === 498 || // Groq Flex Limit
     s >= 500 || // Menangkap 500, 502, 503, 504, dll
