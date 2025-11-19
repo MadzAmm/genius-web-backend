@@ -258,7 +258,7 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 // B. Groq
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-// C. OpenRouter (Via OpenAI SDK)
+// C. OpenRouter
 const openRouterClient = new OpenAI({
   baseURL: 'https://openrouter.ai/api/v1',
   apiKey: process.env.OPENROUTER_API_KEY,
@@ -267,10 +267,17 @@ const openRouterClient = new OpenAI({
 // D. Cerebras
 const cerebrasClient = new Cerebras({ apiKey: process.env.CEREBRAS_API_KEY });
 
-// E. [BARU] SambaNova (Via OpenAI SDK)
+// E. SambaNova
 const sambaNovaClient = new OpenAI({
   baseURL: 'https://api.sambanova.ai/v1',
   apiKey: process.env.SAMBANOVA_API_KEY,
+});
+
+// F. [BARU] Cloudflare Workers AI (Via OpenAI SDK)
+const cloudflareClient = new OpenAI({
+  // Perhatikan format URL ini, butuh Account ID
+  baseURL: `https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/ai/v1`,
+  apiKey: process.env.CLOUDFLARE_API_TOKEN,
 });
 
 // --- 2. KONFIGURASI CORS ---
@@ -309,7 +316,6 @@ export default async function handler(req, res) {
     return;
   }
 
-  // Body Parser Safety
   let task, prompt;
   try {
     if (typeof req.body === 'string') {
@@ -326,7 +332,6 @@ export default async function handler(req, res) {
   try {
     let responsePayload;
 
-    // --- 4. LOGIKA ROUTER ---
     switch (task) {
       // === TASK UTAMA (CASCADE) ===
       case 'chat_general':
@@ -343,7 +348,15 @@ export default async function handler(req, res) {
         break;
 
       // === RUTE DEBUG (TESTING) ===
-      case '_debug_sambanova': // [BARU]
+      case '_debug_cloudflare': // [BARU]
+        // Cloudflare menggunakan nama model dengan @cf/
+        responsePayload = await callCloudflare(
+          '@cf/meta/llama-3-8b-instruct',
+          prompt
+        );
+        break;
+
+      case '_debug_sambanova':
         responsePayload = await callSambaNova(
           'Meta-Llama-3.1-8B-Instruct',
           prompt
@@ -373,6 +386,31 @@ export default async function handler(req, res) {
       error: 'Semua model AI sedang sibuk atau gagal.',
       details: error.message,
     });
+  }
+}
+
+// --- 5. FUNGSI HELPER (PEMANGGIL AI) ---
+
+// [BARU] Fungsi Helper Cloudflare
+async function callCloudflare(modelName, prompt) {
+  console.log(`(Debug) Mencoba Cloudflare: ${modelName}...`);
+  try {
+    const completion = await cloudflareClient.chat.completions.create({
+      model: modelName,
+      messages: [
+        { role: 'system', content: 'You are a helpful assistant.' },
+        { role: 'user', content: prompt },
+      ],
+    });
+
+    const reply =
+      completion.choices[0]?.message?.content || 'Tidak ada respons.';
+    return { reply_text: reply, source: `cloudflare/${modelName}` };
+  } catch (error) {
+    console.error(`(Debug) GAGAL di Cloudflare:`, error);
+    const enhancedError = new Error(error.message);
+    enhancedError.status = error.status || 500;
+    throw enhancedError;
   }
 }
 
