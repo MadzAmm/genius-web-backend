@@ -649,8 +649,31 @@ const runMiddleware = (req, res, fn) => {
 };
 
 // Persona Default (Agar konsisten saat berganti model)
-const DEFAULT_SYSTEM_INSTRUCTION =
-  'Role: Kamu adalah Asisten AI cerdas Portofolio untuk Muhammad yang diberi nama Madzam.  Style: Profesional, Ramah, Teknis, dan sedikit lucu. Context: Muhammad yang kamu kenal adalah Lulusan Aqidah Filsafat Islam UIN Syarif Hidayatullah, dia memiliki skill teknis di Web Development, Data Analist dan Data Science. Rules: 1. Gaya bicara Profesional, membantu, ramah, dan teknis jika diperlukan, dan sesekali bercanda untuk mencairkan suasana. Gunakan Bahasa Indonesia yang baik dan luwes. 2. Jangan mengaku sebagai ChatGPT/Gemini atau model ai lain, kamu adalah Asisten Virtual Muhammad yang bernama Madzam.';
+const DEFAULT_SYSTEM_INSTRUCTION = `
+[IDENTITAS UTAMA KAMU (AI)]
+Nama: Madzam
+Peran: Asisten Virtual Cerdas untuk Portofolio Muhammad.
+Tugas: Menjawab pertanyaan pengunjung website mengenai keahlian, pengalaman, proyek Muhammad, dan pertanyaan lainnya yang bisa membantu.
+
+[DEFINISI ENTITAS (PENTING!)]
+1. KAMU (AI) = Madzam. Kamu adalah asisten/wakil, BUKAN Muhammad.
+2. USER (Lawan Bicara) = Pengunjung website, Recruiter, atau Klien potensial. USER INI BUKAN MUHAMMAD. Jangan pernah menganggap user adalah Muhammad. Jangan pernah memanggil user "user", kalau perlu tanyakan nama dan gendernya agar bisa menentukan panggilan mas atau mba (disusul dengan namanya jika ada) kalau tidak maka panggil saja kak atau kamu.
+3. MUHAMMAD (Subjek/Owner) = Pemilik portofolio ini. Rujuk dia sebagai orang ketiga ("Mas Muhammad", "Beliau", "dia", "Creator saya", atau "Bos saya", dan sejenisnya).
+
+[LATAR BELAKANG MUHAMMAD]
+- Pendidikan: Lulusan Aqidah Filsafat Islam (UIN Syarif Hidayatullah).
+- Keahlian Teknis: Web Development, Data Analyst, dan Data Science.
+- Keunikan: Kombinasi unik antara pemikiran filosofis dan logika coding yang kuat.
+- Soft-skill: Fast learner, Tech-Savy, Meticulous, Caffeine Addict (jelaskan bila perlu).
+
+[ATURAN GAYA BICARA KAMU (AI)]
+1. Tone: Profesional namun Ramah, Membantu, Teknis (jika ditanya soal kode), dan Sedikit Humoris/Witty untuk mencairkan suasana.
+2. Bahasa: Gunakan Bahasa Indonesia yang luwes, tidak kaku seperti robot, tapi tetap sopan.
+3. Posisi: Bicaralah seolah-olah kamu sedang mempromosikan Muhammad kepada user.
+   - SALAH: "Saya lulusan UIN..." (Ini mengaku sebagai Muhammad).
+   - BENAR: "Mas Muhammad itu lulusan UIN..." (Ini asisten yang menjelaskan).
+4. Larangan: Jangan mengaku sebagai ChatGPT, Gemini, atau model AI generik. Kamu adalah Madzam.
+`;
 
 // ====================================================================
 // --- 3. HELPER FUNCTIONS BARU (UNTUK MEMORY & SUMMARY) ---
@@ -694,6 +717,9 @@ function isTryAgainError(error) {
     s === 429 || // Rate Limit (Umum)
     s === 498 || // Groq Flex Limit
     s >= 500 || // Menangkap 500, 502, 503, 504, dll
+    s === 502 ||
+    s === 503 ||
+    s === 504 ||
     s === 409; // Conflict (Cerebras menyarankan retry untuk ini)
   //   // Log error untuk debugging di Vercel Logs
   //   // 400 (Bad Request): Sengaja TIDAK memasukkan 400. Jika request salah format (misal JSON rusak), pindah ke provider lain pun kemungkinan besar akan tetap gagal. Jadi lebih baik error dan berhenti agar kita sadar ada bug di kode.
@@ -892,6 +918,11 @@ async function getSummaryFromAI(oldMessages) {
     },
     {
       provider: 'OpenRouter',
+      model: 'tngtech/deepseek-r1t2-chimera:free',
+      fn: callOpenRouter,
+    },
+    {
+      provider: 'OpenRouter',
       model: 'openrouter/sherlock-dash-alpha',
       fn: callOpenRouter,
     },
@@ -909,6 +940,16 @@ async function getSummaryFromAI(oldMessages) {
     {
       provider: 'OpenRouter',
       model: 'openrouter/sherlock-think-alpha',
+      fn: callOpenRouter,
+    },
+    {
+      provider: 'OpenRouter',
+      model: 'deepseek/deepseek-chat-v3-0324:free',
+      fn: callOpenRouter,
+    },
+    {
+      provider: 'OpenRouter',
+      model: 'nousresearch/hermes-3-llama-3.1-405b:free',
       fn: callOpenRouter,
     },
   ];
@@ -956,11 +997,27 @@ async function handleChatCascade(messages, systemInstruction) {
     { provider: 'Groq', model: 'groq/compound', fn: callGroq },
     { provider: 'Cerebras', model: 'llama-3.3-70b', fn: callCerebras },
     {
+      provider: 'OpenRouter',
+      model: 'meta-llama/llama-3.3-70b-instruct:free',
+      fn: callOpenRouter,
+    },
+    {
       provider: 'SambaNova',
       model: 'Meta-Llama-3.3-70B-Instruct',
       fn: callSambaNova,
     },
+    {
+      provider: 'OpenRouter',
+      model: 'openrouter/sherlock-dash-alpha',
+      fn: callOpenRouter,
+    },
     { provider: 'Groq', model: 'qwen/qwen3-32b', fn: callGroq },
+    {
+      provider: 'OpenRouter',
+      model: 'tngtech/deepseek-r1t-chimera:free',
+      fn: callOpenRouter,
+    },
+
     {
       provider: 'Cloudflare',
       model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
@@ -968,12 +1025,18 @@ async function handleChatCascade(messages, systemInstruction) {
     },
     {
       provider: 'OpenRouter',
-      model: 'meta-llama/llama-3.3-70b-instruct:free',
+      model: 'microsoft/mai-ds-r1:free',
       fn: callOpenRouter,
     },
+
     // Jaring Pengaman
     // { provider: 'Gemini', model: 'gemini-2.5-pro', fn: callGemini },
     { provider: 'Groq', model: 'openai/gpt-oss-120b', fn: callGroq },
+    {
+      provider: 'OpenRouter',
+      model: 'tngtech/deepseek-r1t2-chimera:free',
+      fn: callOpenRouter,
+    },
     { provider: 'Cerebras', model: 'gpt-oss-120b', fn: callCerebras },
     {
       provider: 'OpenRouter',
@@ -990,11 +1053,7 @@ async function handleChatCascade(messages, systemInstruction) {
       model: '@cf/openai/gpt-oss-120b',
       fn: callCloudflare,
     },
-    {
-      provider: 'OpenRouter',
-      model: 'openrouter/sherlock-dash-alpha',
-      fn: callOpenRouter,
-    },
+
     {
       provider: 'OpenRouter',
       model: 'mistralai/mistral-7b-instruct:free',
@@ -1015,6 +1074,11 @@ async function handleCodingCascade(messages, systemInstruction) {
     { provider: 'Gemini', model: 'gemini-2.5-pro', fn: callGemini },
     { provider: 'SambaNova', model: 'DeepSeek-R1', fn: callSambaNova },
     {
+      provider: 'OpenRouter',
+      model: 'microsoft/mai-ds-r1:free',
+      fn: callOpenRouter,
+    },
+    {
       provider: 'SambaNova',
       model: 'DeepSeek-R1-Distill-Llama-70B',
       fn: callSambaNova,
@@ -1029,6 +1093,12 @@ async function handleCodingCascade(messages, systemInstruction) {
       model: 'qwen-3-235b-a22b-instruct-2507',
       fn: callCerebras,
     },
+    {
+      provider: 'OpenRouter',
+      model: 'deepseek/deepseek-r1:free',
+      fn: callOpenRouter,
+    },
+
     { provider: 'Cerebras', model: 'gpt-oss-120b', fn: callCerebras },
     { provider: 'Groq', model: 'qwen/qwen3-32b', fn: callGroq },
     {
