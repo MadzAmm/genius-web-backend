@@ -824,19 +824,58 @@ async function runCascadeStrategy(
 
 // FUNGSI BARU: Get Summary dengan Cascade Sendiri
 async function getSummaryFromAI(oldMessages) {
-  const chatText = oldMessages.map((m) => `${m.role}: ${m.content}`).join('\n');
-  const prompt = `
-      Buatlah RINGKASAN PADAT (maksimal 1 paragraf) dari percakapan teknis ini.
-      PENTING: Pertahankan detail library, error, kode, dan tujuan user.
-      
-      [Percakapan]:
-      ${chatText}
+  // 1. DEBUG: Intip dulu apa isinya
+  console.log('--- [DEBUG SUMMARY] Start ---');
+  console.log(`Jumlah pesan yang akan diringkas: ${oldMessages.length}`);
+  ///=====
+  // const chatText = oldMessages.map((m) => `${m.role}: ${m.content}`).join('\n');
+  //============================
+  const chatText = oldMessages
+    .map((m) => `[${m.role.toUpperCase()}]: ${m.content}`)
+    .join('\n');
+  // 2. DEBUG: Cek apakah teks-nya kosong/pendek?
+  console.log(
+    'Sample Teks (50 char pertama):',
+    chatText.substring(0, 50) + '...'
+  );
 
-      [Output Ringkasan]:
-    `;
-  const msgs = [{ role: 'user', content: prompt }];
-  const sys = 'Kamu adalah asisten perangkum.';
+  if (chatText.length < 50) {
+    console.log('Teks terlalu pendek untuk diringkas. Skip.');
+    return 'Percakapan awal (sedikit data).';
+  }
+  // 3. PROMPT LEBIH GALAK (STRICT)
+  // Kita gunakan Bhs Inggris untuk instruksi logic karena AI biasanya lebih patuh.
+  const summarySystem =
+    'You are a technical summarizer agent. DO NOT chat. DO NOT answer the user. ONLY output a summary.';
 
+  const summaryUserMsg = `
+    TASK: Summarize the following conversation history into ONE concise paragraph.
+    
+    RULES:
+    1. Focus on technical details (libraries, errors, code logic).
+    2. Ignore casual greetings ("Hi", "Hello").
+    3. Do NOT respond to the user. Just describe what happened.
+    4. Output must be in INDONESIAN (Bahasa Indonesia).
+
+    --- CONVERSATION START ---
+    ${chatText}
+    --- CONVERSATION END ---
+
+    SUMMARY (Bahasa Indonesia):
+  `;
+  //======================================================
+  // const prompt = `
+  //     Buatlah RINGKASAN PADAT (maksimal 1 paragraf) dari percakapan teknis ini.
+  //     PENTING: Pertahankan detail library, error, kode, dan tujuan user.
+
+  //     [Percakapan]:
+  //     ${chatText}
+
+  //     [Output Ringkasan]:
+  //   `;
+  // const msgs = [{ role: 'user', content: prompt }];
+  // const sys = 'Kamu adalah asisten perangkum.';
+  const msgs = [{ role: 'user', content: summaryUserMsg }];
   // LIST CASCADE UNTUK SUMMARY (Menggunakan Model Cepat dari list Anda)
   const summarizerSteps = [
     // Menggunakan model yang Anda percaya cepat dan mampu
@@ -853,20 +892,37 @@ async function getSummaryFromAI(oldMessages) {
       fn: callOpenRouter,
     },
   ];
-
+  //=============================
   try {
-    console.log('--- Menjalankan Auto-Summary ---');
-    const res = await runCascadeStrategy(
-      'Summarizer',
+    console.log('--- Mengirim ke AI Summarizer... ---');
+    const result = await runCascadeStrategy(
+      'Summarizer Agent',
       summarizerSteps,
       msgs,
-      sys
+      summarySystem
     );
-    return res.reply_text;
+
+    console.log('--- [DEBUG SUMMARY] Result: ---');
+    console.log(result.reply_text.substring(0, 100) + '...'); // Intip hasil
+    return result.reply_text;
   } catch (e) {
-    console.error('Gagal Summary:', e.message);
-    return 'Ringkasan tidak tersedia.';
+    console.error('GAGAL MERANGKUM:', e.message);
+    return 'Ringkasan gagal dibuat.';
   }
+  //================================
+  // try {
+  //   console.log('--- Menjalankan Auto-Summary ---');
+  //   const res = await runCascadeStrategy(
+  //     'Summarizer',
+  //     summarizerSteps,
+  //     msgs,
+  //     sys
+  //   );
+  //   return res.reply_text;
+  // } catch (e) {
+  //   console.error('Gagal Summary:', e.message);
+  //   return 'Ringkasan tidak tersedia.';
+  // }
 }
 
 // ====================================================================
