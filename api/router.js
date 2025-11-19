@@ -880,16 +880,35 @@ async function getSummaryFromAI(oldMessages) {
   // LIST CASCADE UNTUK SUMMARY (Menggunakan Model Cepat dari list Anda)
   const summarizerSteps = [
     // Menggunakan model yang Anda percaya cepat dan mampu
-    { provider: 'Cerebras', model: 'llama3.1-8b', fn: callCerebras },
     {
-      provider: 'OpenRouter',
-      model: 'meta-llama/llama-3.2-3b-instruct:free',
-      fn: callOpenRouter,
+      provider: 'Gemini',
+      model: 'gemini-2.0-flash',
+      fn: callGemini,
     },
-    { provider: 'Groq', model: 'llama-3.1-8b-instant', fn: callGroq },
     {
       provider: 'OpenRouter',
       model: 'google/gemini-2.0-flash-exp:free',
+      fn: callOpenRouter,
+    },
+    {
+      provider: 'OpenRouter',
+      model: 'openrouter/sherlock-dash-alpha',
+      fn: callOpenRouter,
+    },
+    {
+      provider: 'Cloudflare',
+      model: '@cf/google/gemma-3-12b-it',
+      fn: callCloudflare,
+    },
+
+    {
+      provider: 'OpenRouter',
+      model: 'meta-llama/llama-3.3-70b-instruct:free',
+      fn: callOpenRouter,
+    },
+    {
+      provider: 'OpenRouter',
+      model: 'openrouter/sherlock-think-alpha',
       fn: callOpenRouter,
     },
   ];
