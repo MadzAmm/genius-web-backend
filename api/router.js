@@ -344,7 +344,10 @@ export default async function handler(req, res) {
 
       // === RUTE DEBUG (TESTING) ===
       case '_debug_sambanova': // [BARU]
-        responsePayload = await callSambaNova('E5-Mistral-7B-Instruct', prompt);
+        responsePayload = await callSambaNova(
+          'Meta-Llama-3.1-8B-Instruct',
+          prompt
+        );
         break;
 
       case '_debug_openrouter':
