@@ -231,6 +231,32 @@
 //
 //
 //
+//
+// Alur logika (logic flow) di kode *backend* `api/router.js:`
+
+// 1.  Pengecekan Keamanan & Validasi (Satpam Depan)
+//       Apakah metode-nya `POST`? (Jika tidak, tolak).
+//       Apakah data JSON valid?
+//       Cek Wajib: Apakah ada `task` DAN `prompt`?
+//           JIKA TIDAK: Langsung Error ("Input tidak valid"). Berhenti di sini.
+//           JIKA IYA: Lanjut
+
+// 2.  Pengecekan Jalan Pintas / Shortcut (Jalur VIP)
+//       Sistem melihat isi `prompt`. Apakah dimulai dengan `@` (misal `@groq`)?
+//         JIKA IYA: Abaikan apapun isi `task`. Langsung panggil fungsi shortcut yang diminta (misal `callGroq`). Kirim jawaban, dan SELESAI. (Tidak lanjut ke bawah).
+//             JIKA TIDAK: Lanjut ke langkah berikutnya.
+
+// 3.  Pengecekan Task & Eksekusi Cascade (Jalur Reguler)
+//       Karena tidak ada shortcut, sistem melihat isi `task`.
+//         Switch Case:
+//           Jika `chat_general`: Jalankan fungsi `handleChatCascade` (Gemini -> Groq -> dll).
+//           Jika `assistent_coding`: Jalankan fungsi `handleCodingCascade` (Gemini Pro -> Groq -> dll).
+//           Jika tidak dikenal: *Error*.
+
+// Validasi -> Cek Shortcut -> Cek Task (Cascade)
+//
+//
+//
 // File: api/router.js
 // VERSI 22 (ALL-IN-ONE): Gemini + Groq + OpenRouter + Cerebras
 // Semua provider aktif dan siap digunakan.
@@ -300,8 +326,11 @@ const openRouterClient = new OpenAI({
   apiKey: process.env.OPENROUTER_API_KEY,
 });
 
-// D. Cerebras (Native SDK)
-const cerebrasClient = new Cerebras({ apiKey: process.env.CEREBRAS_API_KEY });
+// D. Cerebras (Native SDK) dengan maxRetries: 0 (by default retry 2x tapi dimatikan karena ingin Fail Fast (Gagal Cepat) dan langsung pindah.)
+const cerebrasClient = new Cerebras({
+  apiKey: process.env.CEREBRAS_API_KEY,
+  maxRetries: 0,
+});
 
 // E. SambaNova (Via OpenAI SDK)
 const sambaNovaClient = new OpenAI({
@@ -511,11 +540,6 @@ async function handleChatCascade(prompt) {
       model: 'deepseek/deepseek-r1-distill-llama-70b:free',
       fn: callOpenRouter,
     },
-    {
-      provider: 'OpenRouter',
-      model: 'mistralai/mistral-7b-instruct:free',
-      fn: callOpenRouter,
-    },
 
     // 11. Cloudflare (Backup)
     {
@@ -533,6 +557,12 @@ async function handleChatCascade(prompt) {
     {
       provider: 'OpenRouter',
       model: 'openrouter/sherlock-dash-alpha',
+      fn: callOpenRouter,
+    },
+
+    {
+      provider: 'OpenRouter',
+      model: 'mistralai/mistral-7b-instruct:free',
       fn: callOpenRouter,
     },
   ];
@@ -622,7 +652,7 @@ async function handleShortcut(fullPrompt) {
     '@router-sherlock': (p) =>
       callOpenRouter('openrouter/sherlock-dash-alpha', p),
     '@router-mistral': (p) =>
-      callOpenRouter('mistralai/mistral-7b-instruct:free', p),
+      callOpenRouter('mistralai/mistral-7b-instruct:free', p), //inggris
     '@router-deepseek': (p) =>
       callOpenRouter('deepseek/deepseek-r1-distill-llama-70b:free', p),
     '@router-llama': (p) =>
@@ -659,12 +689,25 @@ async function handleShortcut(fullPrompt) {
 function isTryAgainError(error) {
   const s = error?.status;
   const isRetryable =
-    s === 429 || s === 503 || s === 500 || s === 502 || s === 504;
+    !s || // Connection Error biasanya tidak punya status code
+    s === 401 || // Authentication Error (Kunci Salah)
+    s === 402 || // Payment Required (Saldo Habis - Cerebras/OpenRouter)
+    s === 403 || // Permission Denied
+    s === 404 || // Not Found (Model tidak ada/salah nama)
+    s === 408 || // Request Timeout
+    s === 410 || // Gone (Model Deprecated/Removed - KHUSUS SAMBANOVA)
+    s === 429 || // Rate Limit (Umum)
+    s === 498 || // Groq Flex Limit
+    s >= 500 || // Menangkap 500, 502, 503, 504, dll
+    s === 409; // Conflict (Cerebras menyarankan retry untuk ini);
   // Log error untuk debugging di Vercel Logs
+  // 400 (Bad Request): Sengaja TIDAK memasukkan 400. Jika request salah format (misal JSON rusak), pindah ke provider lain pun kemungkinan besar akan tetap gagal. Jadi lebih baik error dan berhenti agar kita sadar ada bug di kode.
   if (isRetryable)
-    console.log(
-      `(Error Check) Status ${s} terdeteksi. Mencoba provider berikutnya.`
-    );
+    console.warn(
+      `(Error Check) Status ${
+        s || 'Network/Connection'
+      } terdeteksi. Mencoba provider berikutnya...`
+    ); //bisa juga console.log(...)
   return isRetryable;
 }
 
