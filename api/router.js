@@ -840,13 +840,17 @@ async function getSummaryFromAI(oldMessages) {
   // LIST CASCADE UNTUK SUMMARY (Menggunakan Model Cepat dari list Anda)
   const summarizerSteps = [
     // Menggunakan model yang Anda percaya cepat dan mampu
-    { provider: 'Gemini', model: 'gemini-2.5-flash', fn: callGemini },
-    { provider: 'Groq', model: 'qwen/qwen3-32b', fn: callGroq },
-    { provider: 'Cerebras', model: 'llama-3.3-70b', fn: callCerebras },
+    { provider: 'Cerebras', model: 'llama3.1-8b', fn: callCerebras },
     {
-      provider: 'SambaNova',
-      model: 'Meta-Llama-3.3-70B-Instruct',
-      fn: callSambaNova,
+      provider: 'OpenRouter',
+      model: 'meta-llama/llama-3.2-3b-instruct:free',
+      fn: callOpenRouter,
+    },
+    { provider: 'Groq', model: 'llama-3.1-8b-instant', fn: callGroq },
+    {
+      provider: 'OpenRouter',
+      model: 'google/gemini-2.0-flash-exp:free',
+      fn: callOpenRouter,
     },
   ];
 
@@ -873,7 +877,6 @@ async function handleChatCascade(messages, systemInstruction) {
   // DAFTAR URUTAN PRIORITAS (Persis seperti kode asli Anda)
   const steps = [
     { provider: 'Gemini', model: 'gemini-2.5-flash', fn: callGemini },
-    { provider: 'Groq', model: 'qwen/qwen3-32b', fn: callGroq },
     { provider: 'Groq', model: 'groq/compound', fn: callGroq },
     { provider: 'Cerebras', model: 'llama-3.3-70b', fn: callCerebras },
     {
@@ -881,6 +884,7 @@ async function handleChatCascade(messages, systemInstruction) {
       model: 'Meta-Llama-3.3-70B-Instruct',
       fn: callSambaNova,
     },
+    { provider: 'Groq', model: 'qwen/qwen3-32b', fn: callGroq },
     {
       provider: 'Cloudflare',
       model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
@@ -892,7 +896,7 @@ async function handleChatCascade(messages, systemInstruction) {
       fn: callOpenRouter,
     },
     // Jaring Pengaman
-    { provider: 'Gemini', model: 'gemini-2.5-pro', fn: callGemini },
+    // { provider: 'Gemini', model: 'gemini-2.5-pro', fn: callGemini },
     { provider: 'Groq', model: 'openai/gpt-oss-120b', fn: callGroq },
     { provider: 'Cerebras', model: 'gpt-oss-120b', fn: callCerebras },
     {
@@ -1083,6 +1087,12 @@ async function handleShortcut(fullPrompt, history, systemInstruction) {
   };
 
   const shortcuts = {
+    '@router-gemini': (p) =>
+      wrap(callOpenRouter, 'google/gemini-2.0-flash-exp:free', p),
+    '@groq-llama': (p) => wrap(callGroq, 'llama-3.1-8b-instant', p),
+    '@router-llama3': (p) =>
+      wrap(callOpenRouter, 'meta-llama/llama-3.2-3b-instruct:free', p),
+    '@Cerebras-llama3': (p) => wrap(callCerebras, 'llama3.1-8b', p),
     '@groq-compound': (p) => wrap(callGroq, 'groq/compound', p),
     '@groq-qwen': (p) => wrap(callGroq, 'qwen/qwen3-32b', p),
     '@groq-gpt': (p) => wrap(callGroq, 'openai/gpt-oss-120b', p),
